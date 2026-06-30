@@ -175,8 +175,8 @@ app_mode = st.radio("Select Generation Mode", ["Full Booklet Mode", "Topical Que
 is_topical = (app_mode == "Topical Question Bank Mode")
 
 if is_topical:
-    st.info("Topical Mode: We will scan papers for your keyword and extract only matching questions.")
-    keyword = st.text_input("Topic Keyword (e.g., Stoichiometry)", value="").strip()
+    st.info("Topical Mode: We will scan papers for your keywords and extract only matching questions.")
+    keyword = st.text_input("Topic Keywords (comma-separated, e.g., Stoichiometry, Acid, Velocity)", value="").strip()
 else:
     keyword = ""
 
@@ -282,8 +282,10 @@ if submit_button:
                         questions = parse_question_boundaries(reader)
                         
                         matched_q_nums = []
+                        keywords_list = [kw.strip().lower() for kw in keyword.split(',') if kw.strip()]
                         for q_num, data in questions.items():
-                            if re.search(rf"\b{re.escape(keyword.lower())}\b", data["text"].lower()):
+                            text_lower = data["text"].lower()
+                            if any(re.search(rf"\b{re.escape(kw)}\b", text_lower) for kw in keywords_list):
                                 matched_q_nums.append(q_num)
                         
                         if matched_q_nums:
