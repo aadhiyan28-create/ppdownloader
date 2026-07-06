@@ -513,15 +513,12 @@ if submit_button:
                                 if matched_pat:
                                     matched_q_nums.append((q_num, matched_pat))
                     else:
-                        # Full Booklet Mode: Match all questions sequentially
-                        for q_num in sorted(questions.keys()):
-                            matched_q_nums.append((q_num, "Full Booklet Mode"))
-                        
-                        # Fallback: if no questions found, add all pages directly
-                        if not questions:
-                            successful_topical_papers.append((year, series, comp_var))
-                            for p_num in range(1, len(reader.pages)):
-                                merger.add_page(reader.pages[p_num])
+                        # Full Booklet Mode: Add ALL pages directly (including front cover at page 0).
+                        # Bypass question-based processing entirely — no cropping, no banners, no page skipping.
+                        successful_topical_papers.append((year, series, comp_var))
+                        for p_num in range(len(reader.pages)):
+                            merger.add_page(reader.pages[p_num])
+                        # matched_q_nums stays empty, so the per-question loop below is skipped.
                     
                     if matched_q_nums:
                         successful_topical_papers.append((year, series, comp_var))
@@ -549,22 +546,25 @@ if submit_button:
                                 crop_bottom = float(mb.bottom)
                                 crop_top = float(mb.top)
                                 
-                                # Start-page: crop above the question's start_y (if mid-page start)
-                                if p_num == data["start_page"] and data.get("start_y") is not None:
-                                    if data["start_y"] <= orig_height - 100:
-                                        crop_top = data["start_y"] + 40
+                                # Only apply mid-page cropping in Topical mode.
+                                # In Full Booklet mode, always show the complete page.
+                                if is_topical:
+                                    # Start-page: crop above the question's start_y (if mid-page start)
+                                    if p_num == data["start_page"] and data.get("start_y") is not None:
+                                        if data["start_y"] <= orig_height - 100:
+                                            crop_top = data["start_y"] + 40
+                                            
+                                    # End-page: crop below the question's end_y (if mid-page end)
+                                    if p_num == data["end_page"] and data.get("end_y") is not None:
+                                        crop_bottom = data["end_y"] - 10
                                         
-                                # End-page: crop below the question's end_y (if mid-page end)
-                                if p_num == data["end_page"] and data.get("end_y") is not None:
-                                    crop_bottom = data["end_y"] - 10
-                                    
-                                # Apply mediabox crop
-                                p_obj.mediabox = RectangleObject([
-                                    float(mb.left),
-                                    crop_bottom,
-                                    float(mb.right),
-                                    crop_top
-                                ])
+                                    # Apply mediabox crop
+                                    p_obj.mediabox = RectangleObject([
+                                        float(mb.left),
+                                        crop_bottom,
+                                        float(mb.right),
+                                        crop_top
+                                    ])
                                 
                                 # Draw banner only on the first page of the question
                                 draw_banner = (p_num == data["start_page"])
@@ -575,7 +575,8 @@ if submit_button:
                                 draw_red = None
                                 draw_green = False
                                 
-                                if p_num == data["end_page"]:
+                                # Only draw boundary lines in Topical mode
+                                if is_topical and p_num == data["end_page"]:
                                     if data.get("end_y") is not None:
                                         draw_red = data["end_y"]
                                     else:
