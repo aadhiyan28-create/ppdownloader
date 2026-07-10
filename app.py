@@ -3,12 +3,29 @@ import requests
 import io
 import time
 import re
+import json
+import os
 from pypdf import PdfWriter, PdfReader
 from pypdf.generic import RectangleObject
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import A4
 
 # --- CONFIGURATION ---
+CONFIG_FILE = "user_config.json"
+
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f)
+
 SUBJECT_MAPPING = {
     "Biology": "0610",
     "Physics": "0625",
@@ -70,32 +87,33 @@ HEADERS = {
 def generate_cover_page(student_name, subject_name, years, components, series_list, mode="Full Booklet", keyword=""):
     """Generates a cover page PDF in-memory using reportlab."""
     packet = io.BytesIO()
-    can = canvas.Canvas(packet, pagesize=letter)
+    # A4 to match the source question pages (letter caused mismatched page size)
+    can = canvas.Canvas(packet, pagesize=A4)
     
     can.setFont("Helvetica-Bold", 24)
     if mode == "Topical":
-        can.drawCentredString(300, 700, f"Topical Question Bank: {keyword.title()}")
+        can.drawCentredString(298, 760, f"Topical Question Bank: {keyword.title()}")
     else:
-        can.drawCentredString(300, 700, "IGCSE Past Paper Booklet")
+        can.drawCentredString(298, 760, "IGCSE Past Paper Booklet")
     
     can.setFont("Helvetica", 16)
-    can.drawCentredString(300, 650, f"Subject: {subject_name} ({SUBJECT_MAPPING[subject_name]})")
+    can.drawCentredString(298, 710, f"Subject: {subject_name} ({SUBJECT_MAPPING[subject_name]})")
     
     can.setFont("Helvetica-Oblique", 14)
     if student_name:
         if mode == "Topical":
-            can.drawCentredString(300, 600, f"{student_name}'s Custom Topic Booklet: {keyword}")
+            can.drawCentredString(298, 660, f"{student_name}'s Custom Topic Booklet: {keyword}")
         else:
-            can.drawCentredString(300, 600, f"Prepared for: {student_name}")
+            can.drawCentredString(298, 660, f"Prepared for: {student_name}")
         
     can.setFont("Helvetica", 12)
-    can.drawString(100, 500, "Booklet Details:")
-    can.drawString(120, 480, f"- Years: {years[0]} to {years[1]}")
-    can.drawString(120, 460, f"- Component (Paper): {components}")
+    can.drawString(100, 560, "Booklet Details:")
+    can.drawString(120, 540, f"- Years: {years[0]} to {years[1]}")
+    can.drawString(120, 520, f"- Component (Paper): {components}")
     
     series_map = {"m": "Feb/March", "s": "May/June", "w": "Oct/Nov"}
     series_str = ", ".join([series_map.get(s, s) for s in series_list])
-    can.drawString(120, 440, f"- Exam Series: {series_str}")
+    can.drawString(120, 500, f"- Exam Series: {series_str}")
     
     can.save()
     packet.seek(0)
@@ -104,13 +122,14 @@ def generate_cover_page(student_name, subject_name, years, components, series_li
 def generate_index_page(successful_papers, subject_code):
     """Generates an index page with hyperlinks to Mark Schemes."""
     packet = io.BytesIO()
-    can = canvas.Canvas(packet, pagesize=letter)
+    # A4 to match the source question pages
+    can = canvas.Canvas(packet, pagesize=A4)
     
     can.setFont("Helvetica-Bold", 18)
-    can.drawString(100, 750, "Topical Index - Source Papers & Mark Schemes")
+    can.drawString(100, 790, "Topical Index - Source Papers & Mark Schemes")
     
     can.setFont("Helvetica", 12)
-    y_position = 710
+    y_position = 750
     can.drawString(100, y_position, "Click a paper below to view its official Mark Scheme online:")
     y_position -= 30
     
@@ -136,10 +155,92 @@ def generate_index_page(successful_papers, subject_code):
     packet.seek(0)
     return packet
 
-def _is_formula_page(reader, page_num):
-    """Returns True if the page is a front-matter formula sheet that should be skipped."""
+def _is_formula_page(reader, page_num, subject_code=None, comp_var=None):
+    """Returns True if the page is a front-matter formula sheet or Periodic Table to be skipped."""
     # Hard skip page 2 of the raw PDF (index 1)
-    return page_num == 1
+    if page_num == 1:
+        return True
+        
+    if subject_code == "0620" and comp_var and comp_var.startswith("4"):
+        page = reader.pages[page_num]
+        text = page.extract_text().lower()
+        # Skip any Chemistry Paper 4 page that contains BOTH the Periodic Table
+        # and the mole-volume line.
+        if ("the periodic table of elements" in text
+                and "the volume of one mole of any gas is 24 dm3" in text):
+            return True
+            
+    return False
+
+def extract_words_with_y(page):
+    """Extracts words with their associated Y-coordinates from a PDF page."""
+    runs = []
+    def visitor(text, cm, tm, fontDict, fontSize):
+        if text.strip():
+            runs.append((text, tm[4], tm[5]))
+    page.extract_text(visitor_text=visitor)
+    
+    if not runs:
+        return []
+        
+    # Group runs by approximate Y-coordinate descending (top of page to bottom)
+    runs.sort(key=lambda x: x[2], reverse=True)
+    grouped_lines = []
+    current_y = None
+    current_line = []
+    
+    for text, x, y in runs:
+        if current_y is None:
+            current_y = y
+            current_line.append((text, x, y))
+        elif abs(current_y - y) < 5:
+            current_line.append((text, x, y))
+        else:
+            current_line.sort(key=lambda item: item[1])
+            grouped_lines.extend(current_line)
+            current_y = y
+            current_line = [(text, x, y)]
+    if current_line:
+        current_line.sort(key=lambda item: item[1])
+        grouped_lines.extend(current_line)
+    
+    words = []
+    for text, x, y in grouped_lines:
+        for word in text.split():
+            clean = re.sub(r'\W+', '', word.lower())
+            if clean:
+                words.append((clean, y))
+    return words
+
+def detect_text_overlap(page_n, page_n_plus_1):
+    """
+    Detects if the text at the bottom of page_n is duplicated at the top of page_n_plus_1.
+    Looks for an exact match of a 5-word sequence.
+    Returns the Y-coordinate on page_n_plus_1 below which the text is NOT duplicated, or None.
+    """
+    words_n = extract_words_with_y(page_n)
+    words_next = extract_words_with_y(page_n_plus_1)
+    
+    if len(words_n) < 3 or len(words_next) < 3:
+        return None
+        
+    search_space_n = words_n[-100:]
+    search_space_next = words_next[:100]
+    
+    if len(search_space_n) < 3 or len(search_space_next) < 3:
+        return None
+        
+    for i in range(len(search_space_n) - 2):
+        seq_n = [w[0] for w in search_space_n[i:i+3]]
+        for j in range(len(search_space_next) - 2):
+            seq_next = [w[0] for w in search_space_next[j:j+3]]
+            if seq_n == seq_next:
+                # Match found. Find the lowest Y coordinate among the matched words.
+                # Subtracting 10 as a small buffer to ensure the duplicate text is fully removed.
+                min_y = min(w[1] for w in search_space_next[j:j+3])
+                return min_y - 10
+                
+    return None
 
 def get_leftmost_candidates(page, page_num):
     """Finds all candidate numbers that appear at the leftmost edge of text runs on a page."""
@@ -173,7 +274,7 @@ def get_leftmost_candidates(page, page_num):
         current_line.sort(key=lambda item: item[1])
         grouped_lines.append((current_line, current_y))
         
-    candidates = []
+        candidates = []
     for line_runs, y in grouped_lines:
         if not line_runs:
             continue
@@ -183,8 +284,10 @@ def get_leftmost_candidates(page, page_num):
         # Spatial Left-Edge Validation Pattern
         match = re.match(r'^\s*(\d+)\s*(?:\([a-z]\)|[A-Z]|\b)', leftmost_text)
         if match:
-            # Must be near the left margin (X < 100)
-            if leftmost_x < 100:
+            # Reject junk runs: barcodes / leftover text runs with reset transforms
+            # sit at x < 25 (e.g. x≈21.8 barcode, x=0.0 fragments), and anything
+            # far from the left margin (x > 250) is body content, not a Q number.
+            if 25 <= leftmost_x <= 250:
                 num = int(match.group(1))
                 line_text = "".join(item[0] for item in line_runs)
                 candidates.append({
@@ -196,14 +299,14 @@ def get_leftmost_candidates(page, page_num):
                 })
     return candidates
 
-def parse_question_boundaries(reader):
+def parse_question_boundaries(reader, subject_code=None, comp_var=None):
     """Parses PDF pages to find structural question boundaries."""
     questions = {}
     
     # Build set of skippable formula pages
     skip_pages = set()
     for page_num in range(len(reader.pages)):
-        if _is_formula_page(reader, page_num):
+        if _is_formula_page(reader, page_num, subject_code, comp_var):
             skip_pages.add(page_num)
             
     # Pass 1: Extract all leftmost candidates
@@ -212,6 +315,26 @@ def parse_question_boundaries(reader):
         if page_num in skip_pages:
             continue
         all_candidates.extend(get_leftmost_candidates(reader.pages[page_num], page_num))
+        
+    # Pass 1b: Lock onto the question-number left margin for THIS paper.
+    # Every real question number is printed on the same vertical line (same X).
+    # False positives (graph axis labels, sub-part indents, stray fragments)
+    # sit at other X values. Find the dominant left-margin X (the mode of the
+    # left-region candidate X's) and keep only numbers that land on that line.
+    from collections import Counter
+    if subject_code == "0606":
+        left_region = all_candidates
+    else:
+        left_region = [c for c in all_candidates if c["x"] < 90]
+        
+    if left_region:
+        # Round to nearest point so tiny sub-pixel differences group together
+        margin_x = Counter(round(c["x"]) for c in left_region).most_common(1)[0][0]
+        MARGIN_TOL = 6  # points of horizontal wiggle room
+        all_candidates = [
+            c for c in all_candidates
+            if abs(c["x"] - margin_x) <= MARGIN_TOL
+        ]
         
     # Sort candidates chronologically (by page, then by Y coordinate descending)
     all_candidates.sort(key=lambda c: (c["page"], -c["y"]))
@@ -223,11 +346,11 @@ def parse_question_boundaries(reader):
     for i, candidate in enumerate(all_candidates):
         num = candidate["num"]
         # The candidate number must be greater than the last validated question, and not unreasonably large
-        if num > last_val and num <= last_val + 2:
-            # Lookahead: is there a num + 1 (or num + 2) later?
+        if num > last_val and num <= last_val + 3:
+            # Lookahead: is there a num + 1, num + 2, or num + 3 later?
             has_next = False
             for next_cand in all_candidates[i+1:]:
-                if next_cand["num"] in (num + 1, num + 2):
+                if next_cand["num"] in (num + 1, num + 2, num + 3):
                     has_next = True
                     break
                     
@@ -254,17 +377,20 @@ def parse_question_boundaries(reader):
         if idx < len(nums) - 1:
             next_num = nums[idx + 1]
             next_data = validated_questions[next_num]
+            next_page = next_data["start_page"]
             
-            # Heuristic: If the next question starts near the top of its page (Y > 650),
-            # the current question ended on the previous page.
-            if next_data["start_y"] > 650:
-                prev_page = next_data["start_page"] - 1
+            # The next question starts on a later page: the current question can occupy
+            # up to the page immediately before it (continuation pages in between are kept).
+            if next_page > data["start_page"]:
+                prev_page = next_page - 1
                 while prev_page in skip_pages and prev_page > 0:
                     prev_page -= 1
                 questions[num]["end_page"] = prev_page
                 questions[num]["end_y"] = None
             else:
-                questions[num]["end_page"] = next_data["start_page"]
+                # The next question starts on the SAME page: cut the current question off
+                # just above where the next question begins (enables bottom cropping in render).
+                questions[num]["end_page"] = next_page
                 questions[num]["end_y"] = next_data["start_y"]
                 
     # Extract text content for each question bounded range
@@ -347,18 +473,463 @@ def fetch_paper(subject_code, year, series, component_variant):
         return None
 
 # --- STREAMLIT UI ---
-st.set_page_config(page_title="IGCSE Paper Generator", layout="centered")
+st.set_page_config(page_title="IGCSE Paper Generator", layout="wide")
 
-diagnostic_mode = st.toggle("Developer Diagnostic Mode", value=False)
-st.session_state.diagnostic_mode = diagnostic_mode
+# Kilo-AI landing-page aesthetic: matte black canvas, brand nav header, massive
+# hero title, terminal-line inputs, neon lime CTA. No cards, no heavy boxes.
+KILO_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
-render_boundary_lines = st.toggle("Show Visual Boundary Lines on PDF", value=False)
-st.session_state.render_boundary_lines = render_boundary_lines
+:root {
+    --bg:        #0E0E10;
+    --surface:   #16161A;
+    --line:      #27272A;
+    --text:      #A1A1AA;
+    --text-hi:   #FFFFFF;
+    --label:     #52525B;   /* field labels + secondary indicators (muted slate) */
+    --dim:       #71717A;   /* terminal note text */
+    --accent:    #EAFF53;
+}
 
-st.title("📚 IGCSE Past Paper Booklet Generator")
-st.markdown("Generate custom compiled IGCSE past paper booklets for practice. Downloads files securely and merges them into a single PDF.")
+/* ---- Global typography: JetBrains Mono everywhere ---- */
+html, body, [class*="css"], .stApp, input, textarea, select, button,
+p, div, span, label, h1, h2, h3, h4, li {
+    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, monospace !important;
+}
 
-subject_name = st.selectbox("Subject", list(SUBJECT_MAPPING.keys()))
+/* ---- Canvas ---- */
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stAppViewBlockContainer"] {
+    background-color: var(--bg) !important;
+    color: var(--text) !important;
+}
+[data-testid="stHeader"], #MainMenu, footer, [data-testid="stToolbar"] { visibility: hidden; height: 0; }
+
+.block-container {
+    max-width: 1040px;
+    margin: 0 auto !important;
+    padding-top: 1.25rem;
+    padding-bottom: 6rem;
+    padding-left: 2.5rem;
+    padding-right: 2.5rem;
+    position: relative !important;
+}
+
+/* generous, even gutters between grid columns */
+[data-testid="stHorizontalBlock"] { gap: 2.5rem !important; }
+[data-testid="stHorizontalBlock"] > [data-testid="column"] { padding: 0 !important; }
+
+/* ============ BRAND NAV HEADER ============ */
+.nav-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.25rem 0 2.5rem 0;
+}
+.nav-left { display: flex; align-items: center; gap: 0.85rem; }
+.logo-box {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px;
+    background: var(--text-hi);
+    color: #0E0E10;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 800; font-size: 14px;
+    border-radius: 8px;
+    letter-spacing: -0.5px;
+}
+.nav-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; color: var(--label);
+    border: 1px solid var(--line);
+    padding: 4px 10px; border-radius: 999px;
+}
+.nav-doc {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; color: var(--text) !important;
+    text-decoration: none !important; letter-spacing: 0.3px;
+    transition: color .15s ease;
+}
+.nav-doc:hover { color: var(--text-hi) !important; }
+
+/* Customise Popover Button */
+[data-testid="stPopover"] {
+    position: absolute !important;
+    top: 1.45rem !important;
+    right: 2.5rem !important;
+    z-index: 999999;
+}
+[data-testid="stPopover"] > button {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 13px !important; color: var(--text) !important;
+    letter-spacing: 0.3px !important;
+    padding: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+}
+[data-testid="stPopover"] > button:hover {
+    color: var(--text-hi) !important;
+    background: transparent !important;
+}
+[data-testid="stPopover"] > button p { color: inherit !important; }
+[data-testid="stPopover"] > button svg { display: none !important; }
+
+/* ============ HERO ============ */
+/* Force monospace + inline colors on the raw-HTML title (Streamlit tries to
+   override h1/span fonts and colors inside markdown containers). */
+div[data-testid="stMarkdownContainer"] h1,
+div[data-testid="stMarkdownContainer"] span {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+}
+/* Hide Streamlit's auto-injected heading anchor link icons */
+[data-testid="stMarkdownContainer"] h1 a,
+[data-testid="stMarkdownContainer"] h2 a,
+[data-testid="stMarkdownContainer"] h3 a,
+[data-testid="stHeaderActionElements"] { display: none !important; }
+.hero { text-align: center; margin: 1.5rem 0 3rem 0; }
+.hero-title {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 3.7rem !important;
+    line-height: 1.05 !important;
+    font-weight: 800 !important;
+    color: var(--text-hi) !important;
+    letter-spacing: -2px !important;
+    margin: 0 auto 1.4rem auto !important;
+    max-width: 15ch;
+}
+.hero-sub {
+    font-size: 1.05rem !important;
+    color: var(--label) !important;
+    max-width: 46ch;
+    margin: 0 auto !important;
+    line-height: 1.6 !important;
+    font-weight: 400 !important;
+}
+
+/* ============ LABELS (small, uppercase, tracked, muted) ============ */
+[data-testid="stWidgetLabel"] p,
+.stRadio > label, .stMultiSelect label, .stCheckbox label, .stToggle label,
+[data-testid="stWidgetLabel"] label {
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    color: var(--label) !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* section subheaders -> small uppercase dividers */
+h2, h3 {
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    color: var(--label) !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    margin-top: 1.5rem !important;
+}
+
+/* ============ TERMINAL-LINE INPUTS ============ */
+/* text inputs */
+.stTextInput [data-baseweb="input"],
+.stTextInput [data-baseweb="base-input"],
+.stTextInput > div > div {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+}
+.stTextInput > div > div {
+    border-bottom: 1px solid var(--line) !important;
+    transition: border-color .15s ease;
+}
+.stTextInput > div > div:focus-within { border-bottom-color: var(--text-hi) !important; }
+.stTextInput input {
+    background: transparent !important;
+    color: var(--text-hi) !important;
+    border: none !important;
+    padding-left: 2px !important;
+}
+input::placeholder, textarea::placeholder { color: #52525B !important; }
+
+/* selectbox + multiselect */
+.stSelectbox [data-baseweb="select"] > div,
+.stMultiSelect [data-baseweb="select"] > div {
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 1px solid var(--line) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    transition: border-color .15s ease;
+    color: var(--text-hi) !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    min-height: 40px !important;
+}
+/* flush the selected value text to the left margin (kill baseweb inner padding) */
+.stSelectbox [data-baseweb="select"] [data-baseweb="select-value"],
+.stSelectbox [data-baseweb="select"] > div > div:first-child,
+.stMultiSelect [data-baseweb="select"] > div > div:first-child {
+    padding-left: 0 !important;
+    margin-left: 0 !important;
+}
+.stSelectbox [data-baseweb="select"] > div:focus-within,
+.stMultiSelect [data-baseweb="select"] > div:focus-within {
+    border-bottom-color: var(--text-hi) !important;
+}
+.stSelectbox svg, .stMultiSelect svg { fill: var(--label) !important; }
+.stSelectbox input, .stMultiSelect input { color: var(--text-hi) !important; }
+
+/* dropdown popover */
+[data-baseweb="popover"] ul, [data-baseweb="menu"] {
+    background-color: #16161a !important;
+    border: 1px solid var(--line) !important;
+    border-radius: 10px !important;
+}
+[data-baseweb="menu"] li { color: var(--text) !important; }
+[data-baseweb="menu"] li:hover, [data-baseweb="menu"] li[aria-selected="true"] {
+    color: #0E0E10 !important; background-color: var(--accent) !important;
+}
+
+/* multiselect tags -> flat dark rectangles in a crisp horizontal row */
+.stMultiSelect [data-baseweb="select"] > div > div:first-child {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    gap: 6px !important;
+    overflow-x: auto !important;
+}
+[data-baseweb="tag"] {
+    background-color: #121214 !important;
+    color: var(--accent) !important;
+    border: 1px solid #242427 !important;
+    border-radius: 3px !important;
+    font-weight: 500 !important;
+    font-size: 12px !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    white-space: nowrap !important;
+    flex: 0 0 auto !important;
+    margin: 2px 0 !important;
+}
+[data-baseweb="tag"]::before {
+    content: "";
+    display: inline-block;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin: 0 6px 1px 2px;
+    flex: 0 0 auto;
+}
+[data-baseweb="tag"] svg { fill: var(--accent) !important; }
+[data-baseweb="tag"] [role="button"]:hover { background: transparent !important; }
+
+/* ============ RADIO (active -> accent) ============ */
+[data-testid="stRadio"] > div { display: flex; gap: 1.75rem; flex-wrap: wrap; }
+.stRadio div[role="radiogroup"] label span { color: var(--text) !important; }
+[data-baseweb="radio"] div[aria-checked="true"] { border-color: var(--accent) !important; }
+[data-baseweb="radio"] div[aria-checked="true"] > div { background-color: var(--accent) !important; }
+
+/* ============ TOGGLE (small low-profile pills) ============ */
+[data-testid="stToggle"] button[role="switch"],
+label[data-baseweb="checkbox"] > div:first-child,
+button[role="switch"] {
+    transform: scale(0.78);
+    transform-origin: left center;
+}
+button[role="switch"][aria-checked="false"] { background-color: var(--surface) !important; }
+button[role="switch"][aria-checked="true"]  { background-color: var(--accent) !important; }
+button[role="switch"][aria-checked="false"] > div { background-color: var(--label) !important; }
+button[role="switch"][aria-checked="true"]  > div { background-color: #0E0E10 !important; }
+button[role="switch"] { border: none !important; box-shadow: none !important; }
+
+/* utility toggle block: tight top-left cluster */
+.util-toggles { margin-top: -0.5rem; }
+.util-toggles [data-testid="stToggle"] { margin-bottom: -0.4rem; }
+
+/* ============ SLIDER ============ */
+/* thumbs */
+[data-testid="stSlider"] [data-baseweb="slider"] div[role="slider"] {
+    background-color: var(--accent) !important;
+    box-shadow: none !important;
+    border: none !important;
+}
+/* value bubble above the thumb -> transparent bg, muted accent text */
+[data-testid="stSlider"] [data-testid="stThumbValue"] {
+    background: transparent !important;
+    color: var(--accent) !important;
+    box-shadow: none !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+/* min / max tick labels -> completely transparent bg (kills the yellow box) */
+[data-testid="stTickBar"] { background: transparent !important; }
+[data-testid="stTickBar"] *,
+[data-testid="stTickBarMin"], [data-testid="stTickBarMax"] {
+    background: transparent !important;
+    color: var(--label) !important;
+    box-shadow: none !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+/* base track = thin slate line */
+[data-testid="stSlider"] [data-baseweb="slider"] > div > div {
+    background: var(--line) !important;
+    height: 2px !important;
+}
+/* active selected range = glowing 2px lime line */
+[data-testid="stSlider"] [data-baseweb="slider"] > div > div > div {
+    background: var(--accent) !important;
+    height: 2px !important;
+    box-shadow: 0 0 6px rgba(234,255,83,0.5) !important;
+}
+
+/* ============ KILO CTA BUTTON ============ */
+.stFormSubmitButton > button,
+.stDownloadButton > button {
+    width: 100% !important;
+    background-color: var(--accent) !important;
+    color: #0E0E10 !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 6px !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-weight: 700 !important;
+    font-size: 0.95rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    padding: 1.1rem 1.5rem !important;
+    margin-top: 1.75rem;
+    cursor: pointer !important;
+    transition: transform .12s ease, filter .15s ease !important;
+}
+.stFormSubmitButton > button:hover,
+.stDownloadButton > button:hover {
+    transform: scale(1.005);
+    filter: brightness(1.06);
+    color: #0E0E10 !important;
+    border: none !important;
+    cursor: pointer !important;
+}
+.stFormSubmitButton > button:active,
+.stDownloadButton > button:active { transform: scale(0.99); }
+
+/* secondary (non-CTA) buttons stay subtle */
+.stButton > button {
+    background: transparent !important;
+    color: var(--text) !important;
+    border: 1px solid var(--line) !important;
+    border-radius: 8px !important;
+}
+.stButton > button:hover { color: var(--text-hi) !important; border-color: var(--text-hi) !important; }
+
+/* ============ ALERTS -> terminal note blocks ============ */
+[data-testid="stAlert"], [data-baseweb="alert"] {
+    background-color: transparent !important;
+    border: none !important;
+    border-left: 2px solid var(--line) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding-left: 1.1rem !important;
+}
+[data-testid="stAlert"] * { color: var(--dim) !important; font-size: 13px; letter-spacing: 0.04em; }
+/* note text: dim, tracked, readable; flush to the column's left margin */
+[data-testid="stAlert"], [data-baseweb="alert"] { margin-left: 0 !important; }
+/* Cambridge rules / info note -> lime left bar, dim text */
+[data-baseweb="alert"][kind="info"] { border-left: 2px solid var(--accent) !important; }
+[data-baseweb="alert"][kind="info"] * { color: var(--dim) !important; }
+[data-baseweb="alert"][kind="error"] { border-left: 2px solid #ff6b6b !important; }
+[data-baseweb="alert"][kind="error"] *, [data-baseweb="alert"][kind="negative"] * { color: #ff6b6b !important; }
+[data-baseweb="alert"][kind="success"] { border-left: 2px solid var(--accent) !important; }
+[data-baseweb="alert"][kind="success"] *, [data-baseweb="alert"][kind="positive"] * { color: var(--accent) !important; }
+/* dim the default alert icons */
+[data-baseweb="alert"] svg { fill: var(--dim) !important; }
+
+/* forms & expanders: fully seamless, no card/border/panel */
+[data-testid="stForm"] {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 1rem 0 0 0 !important;
+    box-shadow: none !important;
+}
+.streamlit-expanderHeader, .stExpander header, [data-testid="stExpander"] summary {
+    background: transparent !important; color: var(--text) !important;
+    border: 1px solid var(--line) !important; border-radius: 8px !important;
+}
+[data-testid="stExpander"] { border: none !important; }
+
+/* progress + spinner */
+[data-testid="stProgress"] > div > div { background-color: var(--accent) !important; }
+[data-testid="stProgress"] > div { background-color: var(--line) !important; }
+[data-testid="stStatusWidget"], .stStatusWidget, [data-testid="stSpinner"] svg { color: var(--accent) !important; fill: var(--accent) !important; }
+
+hr { border-color: var(--line) !important; }
+</style>
+"""
+st.markdown(KILO_CSS, unsafe_allow_html=True)
+
+user_config = load_config()
+
+# ---- Brand nav header ----
+st.markdown(
+    """
+    <div class="nav-bar">
+        <div class="nav-left">
+            <span class="logo-box">PP</span>
+            <span class="nav-badge">v1.0 / GitHub</span>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+with st.popover("Customisation", use_container_width=False):
+    with st.form("customisation_form", border=False):
+        st.write("Set default values.")
+        c_name = st.text_input("Default Name", value=user_config.get("default_name", ""))
+        
+        c_series_options = {"m": "Feb/March (m)", "s": "May/June (s)", "w": "Oct/Nov (w)"}
+        c_series = st.multiselect(
+            "Default Series", 
+            options=list(c_series_options.keys()), 
+            format_func=lambda x: c_series_options[x],
+            default=user_config.get("default_series", ["s", "w"])
+        )
+        
+        c_variants = st.multiselect(
+            "Default Variants",
+            options=[1, 2, 3],
+            default=user_config.get("default_variants", [1, 2, 3])
+        )
+        
+        if st.form_submit_button("Save Settings"):
+            user_config["default_name"] = c_name
+            user_config["default_series"] = c_series
+            user_config["default_variants"] = c_variants
+            save_config(user_config)
+            st.rerun()
+
+# ---- Hero ----
+st.markdown(
+    """
+    <div style="text-align: center; margin-top: 2rem; margin-bottom: 1.5rem; line-height: 1.0;">
+        <h1 style="font-family: 'JetBrains Mono', 'Fira Code', monospace !important; font-size: 3.5rem; font-weight: 700; color: #FFFFFF; margin: 0; padding: 0; letter-spacing: -0.03em;">
+            The IGCSE Tool
+        </h1>
+        <h1 style="font-family: 'JetBrains Mono', 'Fira Code', monospace !important; font-size: 3.5rem; font-weight: 700; color: #EAFF53; margin: 0; padding: 0; letter-spacing: -0.03em;">
+            the world was missing
+        </h1>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# ---- Top selectors: Subject + Paper Component (uniform 50/50 dropdowns) ----
+subj_col, comp_col = st.columns(2)
+with subj_col:
+    subject_name = st.selectbox("Subject", list(SUBJECT_MAPPING.keys()))
+with comp_col:
+    paper_component = st.selectbox("Paper Component", [1, 2, 3, 4, 5, 6], index=3)  # Default Paper 4
 
 app_mode = st.radio("Select Generation Mode", ["Full Booklet Mode", "Topical Question Bank Mode"], horizontal=True)
 is_topical = (app_mode == "Topical Question Bank Mode")
@@ -373,38 +944,35 @@ if is_topical:
         keyword = st.text_input("Topic Keywords (comma-separated, e.g., Stoichiometry, Acid, Velocity)", value="").strip()
 
 with st.form("paper_form"):
-    st.subheader("Configuration")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        student_name = st.text_input("Student Name (for Cover Page)")
-        paper_component = st.selectbox("Paper Component", [1, 2, 3, 4, 5, 6], index=3) # Default Paper 4
-        
-    with col2:
+    # Row 1: Student Name + Years Selection on one perfectly aligned 50/50 axis
+    name_col, years_col = st.columns(2)
+    with name_col:
+        student_name = st.text_input("Student Name (for Cover Page)", value=user_config.get("default_name", ""))
+    with years_col:
         current_year = 2024
         years = st.slider("Years Selection", min_value=2015, max_value=current_year, value=(2020, 2023))
-        
-    st.markdown("---")
+
     st.subheader("Variants & Series")
-    
-    # Series
+
+    # Row 2: Exam Series + Variants side-by-side (crisp horizontal pill rows)
     series_options = {"m": "Feb/March (m)", "s": "May/June (s)", "w": "Oct/Nov (w)"}
-    selected_series = st.multiselect(
-        "Exam Series",
-        options=list(series_options.keys()),
-        format_func=lambda x: series_options[x],
-        default=["s", "w"]
-    )
-    
-    # Variants
-    selected_variants = st.multiselect(
-        "Variants (For May/June & Oct/Nov)",
-        options=[1, 2, 3],
-        default=[1, 2, 3]
-    )
-    
+    series_col, variant_col = st.columns(2)
+    with series_col:
+        selected_series = st.multiselect(
+            "Exam Series",
+            options=list(series_options.keys()),
+            format_func=lambda x: series_options[x],
+            default=user_config.get("default_series", ["s", "w"])
+        )
+    with variant_col:
+        selected_variants = st.multiselect(
+            "Variants (For May/June & Oct/Nov)",
+            options=[1, 2, 3],
+            default=user_config.get("default_variants", [1, 2, 3])
+        )
+
     st.info("Note: For Feb/March (m) series, standard variant inputs are ignored and only variant 2 is downloaded as per Cambridge rules.")
-    
+
     btn_text = "Generate Topical Booklet" if is_topical else "Generate and Download Booklet"
     submit_button = st.form_submit_button(btn_text)
 
@@ -473,7 +1041,7 @@ if submit_button:
                 # Collect pages for topical or full booklet mode using stateful parsing
                 for pdf_bytes, year, series, comp_var in downloaded_pdfs:
                     reader = PdfReader(io.BytesIO(pdf_bytes))
-                    questions = parse_question_boundaries(reader)
+                    questions = parse_question_boundaries(reader, subject_code, comp_var)
                     
                     year_short = str(year)[-2:]
                     matched_q_nums = []
@@ -523,6 +1091,8 @@ if submit_button:
                     if matched_q_nums:
                         successful_topical_papers.append((year, series, comp_var))
                         
+                        # Re-read from pdf_bytes to avoid modifying shared memory objects across loops!
+                        fresh_reader = PdfReader(io.BytesIO(pdf_bytes))
                         for q_num, matched_pat in matched_q_nums:
                             question_id = f"{subject_code}_{series}{year_short}_{comp_var}_Q{q_num}"
                             if question_id in compiled_question_ids:
@@ -534,7 +1104,7 @@ if submit_button:
                             diagnostic_info = f"[DIAGNOSTIC LOG] — Question {q_num} | Matched Topic: {selected_math_topic if subject_code == '0606' else keyword} | Core Trigger: '{matched_pat}' | Source Page(s): {data['start_page']}-{data['end_page']}"
                             
                             for p_num in range(data["start_page"], data["end_page"] + 1):
-                                orig_page = reader.pages[p_num]
+                                orig_page = fresh_reader.pages[p_num]
                                 orig_width = float(orig_page.mediabox.width)
                                 orig_height = float(orig_page.mediabox.height)
                                 
@@ -549,6 +1119,13 @@ if submit_button:
                                 # Only apply mid-page cropping in Topical mode.
                                 # In Full Booklet mode, always show the complete page.
                                 if is_topical:
+                                    # Overlap check with the previous page for multi-page questions
+                                    if p_num > data["start_page"]:
+                                        overlap_y = detect_text_overlap(fresh_reader.pages[p_num - 1], orig_page)
+                                        if overlap_y is not None:
+                                            # Crop the top to slice out duplicated text from this page
+                                            crop_top = min(crop_top, overlap_y)
+
                                     # Start-page: crop above the question's start_y (if mid-page start)
                                     if p_num == data["start_page"] and data.get("start_y") is not None:
                                         if data["start_y"] <= orig_height - 100:
@@ -556,15 +1133,22 @@ if submit_button:
                                             
                                     # End-page: crop below the question's end_y (if mid-page end)
                                     if p_num == data["end_page"] and data.get("end_y") is not None:
-                                        crop_bottom = data["end_y"] - 10
+                                        # In PDF coordinates, Y=0 is the bottom. To slice off the next question 
+                                        # (which starts at end_y and goes downwards), we set our crop box's bottom 
+                                        # boundary slightly ABOVE end_y.
+                                        crop_bottom = data["end_y"] + 20
                                         
-                                    # Apply mediabox crop
-                                    p_obj.mediabox = RectangleObject([
+                                    # Apply crop to all bounding boxes to guarantee the viewer respects it
+                                    rect = RectangleObject([
                                         float(mb.left),
                                         crop_bottom,
                                         float(mb.right),
                                         crop_top
                                     ])
+                                    p_obj.mediabox = rect
+                                    p_obj.cropbox = rect
+                                    p_obj.trimbox = rect
+                                    p_obj.artbox = rect
                                 
                                 # Draw banner only on the first page of the question
                                 draw_banner = (p_num == data["start_page"])
@@ -634,3 +1218,13 @@ if submit_button:
                 
             else:
                 status_text.error("Failed to download any papers. Please check your selection and try again.")
+
+# ---- Developer settings (anchored at the very bottom) ----
+st.markdown("<hr style='margin-top:3rem; margin-bottom:1.25rem;'>", unsafe_allow_html=True)
+st.markdown('<div class="util-toggles"></div>', unsafe_allow_html=True)
+st.markdown("###### Developer Settings")
+dev_col1, dev_col2, _dev_spacer = st.columns([1.1, 1.1, 1.4])
+with dev_col1:
+    diagnostic_mode = st.toggle("Diagnostic Mode", value=False, key="diagnostic_mode")
+with dev_col2:
+    render_boundary_lines = st.toggle("Boundary Lines", value=False, key="render_boundary_lines")
