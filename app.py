@@ -155,6 +155,18 @@ def generate_index_page(successful_papers, subject_code):
     packet.seek(0)
     return packet
 
+def _is_mcq_paper(subject_code, comp_var):
+    """Returns True if the paper is a multiple-choice question (MCQ) paper in designated scope."""
+    if not subject_code or not comp_var:
+        return False
+    # Sciences: 0625, 0620, 0610 for Paper 1 & 2
+    if subject_code in ("0625", "0620", "0610") and (comp_var.startswith("1") or comp_var.startswith("2")):
+        return True
+    # Economics (0455), Accounting (0452) for Paper 1
+    if subject_code in ("0455", "0452") and comp_var.startswith("1"):
+        return True
+    return False
+
 def _is_formula_page(reader, page_num, subject_code=None, comp_var=None):
     """Returns True if the page is a front-matter formula sheet or Periodic Table to be skipped."""
     # Hard skip page 2 of the raw PDF (index 1)
@@ -316,83 +328,263 @@ def parse_question_boundaries(reader, subject_code=None, comp_var=None):
             continue
         all_candidates.extend(get_leftmost_candidates(reader.pages[page_num], page_num))
         
-    # Pass 1b: Lock onto the question-number left margin for THIS paper.
-    # Every real question number is printed on the same vertical line (same X).
-    # False positives (graph axis labels, sub-part indents, stray fragments)
-    # sit at other X values. Find the dominant left-margin X (the mode of the
-    # left-region candidate X's) and keep only numbers that land on that line.
-    from collections import Counter
-    if subject_code == "0606":
-        left_region = all_candidates
-    else:
-        left_region = [c for c in all_candidates if c["x"] < 90]
-        
-    if left_region:
-        # Round to nearest point so tiny sub-pixel differences group together
-        margin_x = Counter(round(c["x"]) for c in left_region).most_common(1)[0][0]
-        MARGIN_TOL = 6  # points of horizontal wiggle room
-        all_candidates = [
-            c for c in all_candidates
-            if abs(c["x"] - margin_x) <= MARGIN_TOL
+    # ── MCQ BRANCH (coordinate method) ───────────────────────────────────────
+    # Only for: 0625/0620/0610 paper 1&2  AND  0455/0452 paper 1
+    if _is_mcq_paper(subject_code, comp_var):
+        #
+        # METHOD (user-specified):
+        # 1. Collect EVERY number in the LEFT HALF of each page, recording its
+        #    (x, y) coordinate on that page (many numbers per page allowed).
+        # 2. Find which x values cluster together (± tolerance) = the question
+        #    column, and keep numbers lying on that line.
+        # 3. Walk those numbers in DOCUMENT ORDER and follow the consecutive run
+        #    1,2,3,... starting from 1 (stray bubble digits are skipped, not
+        #    treated as breaks) — this keeps Q1..Q40 contiguous.
+        # 4. For question N: start = y(N) + S, end = y(N+1) + S.
+        #
+        candidates = []
+        for p_num in range(1, len(reader.pages)):
+            if p_num in skip_pages:
+                continue
+            page = reader.pages[p_num]
+            width = float(page.mediabox.right) if page.mediabox else 595.0
+            limit_x = width / 2.0
+            runs = []
+            def visitor(text, cm, tm, fontDict, fontSize):
+                if text.strip():
+                    runs.append((text.strip(), tm[4], tm[5]))
+            page.extract_text(visitor_text=visitor)
+            for text, x0, y0 in runs:
+                first_word = text.split()[0] if text.split() else ""
+                if first_word.isdigit() and 0 < int(first_word) <= 60 and x0 < limit_x:
+                    # ONLY pure standalone digits — no (a), no 6A, no letters
+                    if not re.match(r'^\d+\s*$', first_word):
+                        continue
+                    # Guard: if the full run text is much longer than the marker
+                    # itself, this is likely a sentence continuation,
+                    # not a printed question number on the left margin.
+                    if len(text.strip()) > len(first_word) + 2:
+                        continue
+                    candidates.append({
+                        "num": int(first_word),
+                        "page": p_num,
+                        "x": x0,
+                        "y": y0,
+                        "text": text
+                    })
+
+        if not candidates:
+            return {}
+
+        # Step 2: FIRMLY stick to x ∈ [47, 50] (±1 tolerance for sub-pixel noise).
+        # Anything outside this hard window is NOT the question-number column.
+        X_MIN = 47
+        X_MAX = 50
+        column_candidates = [
+            c for c in candidates
+            if X_MIN - 1 <= c["x"] <= X_MAX + 1
         ]
-        
-    # Sort candidates chronologically (by page, then by Y coordinate descending)
-    all_candidates.sort(key=lambda c: (c["page"], -c["y"]))
-    
-    # Pass 2: Sequence verification (chronological 1, 2, 3, ...) with self-healing lookahead
-    validated_questions = {}
-    last_val = 0
-    
-    for i, candidate in enumerate(all_candidates):
-        num = candidate["num"]
-        # The candidate number must be greater than the last validated question, and not unreasonably large
-        if num > last_val and num <= last_val + 3:
-            # Lookahead: is there a num + 1, num + 2, or num + 3 later?
-            has_next = False
-            for next_cand in all_candidates[i+1:]:
-                if next_cand["num"] in (num + 1, num + 2, num + 3):
-                    has_next = True
-                    break
-                    
-            # Accept if there's a sequence link ahead, or if this is the last question in the booklet
-            if has_next or not any(c["num"] > num for c in all_candidates[i+1:]):
-                validated_questions[num] = {
-                    "start_page": candidate["page"],
-                    "start_y": candidate["y"],
-                    "text_line": candidate["text"]
-                }
-                last_val = num
-                
-    # Define questions dictionary with boundaries based on the validated sequence
+        # If the hard range somehow yields nothing, fall back to cluster method.
+        if not column_candidates:
+            X_TOL = 12
+            x_groups = {}
+            for c in candidates:
+                matched = False
+                for gx in x_groups:
+                    if abs(gx - c["x"]) <= X_TOL:
+                        x_groups[gx].append(c)
+                        matched = True
+                        break
+                if not matched:
+                    x_groups[c["x"]] = [c]
+            column_candidates = max(x_groups.values(), key=len) if x_groups else []
+
+        # Step 3: Build strict consecutive ascending chain, removing outliers
+        # like 8 in 1,2,3,8,4,5,6,7 and filtering out any letter entries.
+        column_candidates.sort(key=lambda c: (c["page"], -c["y"]))
+
+        # Deduplicate: keep only the first occurrence of each number in doc order
+        seen = set()
+        deduped = []
+        for c in column_candidates:
+            if c["num"] not in seen:
+                deduped.append(c)
+                seen.add(c["num"])
+
+        # Walk the sequence and skip isolated outliers that break consecutiveness.
+        # Example: 1,2,3,8,4,5,6,7 → skip the 8, keep 1,2,3,4,5,6,7
+        chain = []
+        i = 0
+        while i < len(deduped):
+            c = deduped[i]
+            if not chain:
+                chain.append(c)
+                i += 1
+                continue
+
+            expected = chain[-1]["num"] + 1
+            if c["num"] == expected:
+                chain.append(c)
+                i += 1
+            elif c["num"] > expected:
+                # Is this an isolated outlier? Peek ahead: if the very next
+                # candidate is the expected number, skip this outlier.
+                if i + 1 < len(deduped) and deduped[i + 1]["num"] == expected:
+                    i += 1  # skip the outlier
+                else:
+                    break  # genuine sequence break
+            else:
+                # c["num"] < expected: duplicate / out-of-order — skip
+                i += 1
+
+        # Fallback: if chain is too short, find the longest consecutive run
+        if len(chain) < 5:
+            num_to_cand = {c["num"]: c for c in deduped}
+            best = []
+            for start_c in deduped:
+                cur = []
+                val = start_c["num"]
+                while val in num_to_cand:
+                    cur.append(num_to_cand[val])
+                    val += 1
+                if len(cur) > len(best):
+                    best = cur
+            if len(best) > len(chain):
+                chain = best
+
+        if not chain:
+            return {}
+
+        # Build the validated question list from the chain (ordered by doc flow).
+        validated_questions = {}
+        for c in chain:
+            validated_questions[c["num"]] = {
+                "start_page": c["page"],
+                "start_y": c["y"],
+                "text_line": c["text"]
+            }
+
+    # ── THEORY BRANCH (Paper 4, etc.) ─────────────────────────────────────────
+    else:
+        # Pass 1: Extract all leftmost candidates
+        all_candidates = []
+        for page_num in range(1, len(reader.pages)):
+            if page_num in skip_pages:
+                continue
+            all_candidates.extend(get_leftmost_candidates(reader.pages[page_num], page_num))
+
+        # Pass 1b: Lock onto the question-number left margin for THIS paper.
+        # Every real question number is printed on the same vertical line (same X).
+        # False positives (graph axis labels, sub-part indents, stray fragments)
+        # sit at other X values. Find the dominant left-margin X (the mode of the
+        # left-region candidate X's) and keep only numbers that land on that line.
+        from collections import Counter
+        if subject_code == "0606":
+            left_region = all_candidates
+        else:
+            left_region = [c for c in all_candidates if c["x"] < 90]
+
+        if left_region:
+            # Round to nearest point so tiny sub-pixel differences group together
+            margin_x = Counter(round(c["x"]) for c in left_region).most_common(1)[0][0]
+            MARGIN_TOL = 6  # points of horizontal wiggle room
+            all_candidates = [
+                c for c in all_candidates
+                if abs(c["x"] - margin_x) <= MARGIN_TOL
+            ]
+
+        # Sort candidates chronologically (by page, then by Y coordinate descending)
+        all_candidates.sort(key=lambda c: (c["page"], -c["y"]))
+
+        # Pass 2: Sequence verification (chronological 1, 2, 3, ...) with self-healing lookahead
+        validated_questions = {}
+        last_val = 0
+
+        for i, candidate in enumerate(all_candidates):
+            num = candidate["num"]
+            # The candidate number must be greater than the last validated question, and not unreasonably large
+            if num > last_val and num <= last_val + 3:
+                # Lookahead: is there a num + 1, num + 2, or num + 3 later?
+                has_next = False
+                for next_cand in all_candidates[i+1:]:
+                    if next_cand["num"] in (num + 1, num + 2, num + 3):
+                        has_next = True
+                        break
+
+                # Accept if there's a sequence link ahead, or if this is the last question in the booklet
+                if has_next or not any(c["num"] > num for c in all_candidates[i+1:]):
+                    validated_questions[num] = {
+                        "start_page": candidate["page"],
+                        "start_y": candidate["y"],
+                        "text_line": candidate["text"]
+                    }
+                    last_val = num
+
+    # ── SHARED: assign page/Y boundaries ───────────────────────────────────────
     nums = sorted(validated_questions.keys())
     for idx, num in enumerate(nums):
         data = validated_questions[num]
+
+        # Default end page is the end of the booklet, but backtrack past any
+        # skip pages (e.g. a periodic table at the very end) so the last
+        # question never swallows a skipped page.
+        end_p = len(reader.pages) - 1
+        while end_p in skip_pages and end_p > data["start_page"]:
+            end_p -= 1
+
+        # MCQ papers end with a separate answer grid (pages whose only detected
+        # "numbers" are 1, 2, ...). Because MCQ questions are page-bounded, the
+        # final question must NOT extend to the booklet's last page — otherwise
+        # it would swallow that answer grid.
+        if _is_mcq_paper(subject_code, comp_var) and idx == len(nums) - 1 and idx > 0:
+            prev_end = questions[nums[idx - 1]]["end_page"]
+            if prev_end >= data["start_page"]:
+                end_p = prev_end
+            # else: last question starts after prev question's end; keep default
+
         questions[num] = {
             "start_page": data["start_page"],
             "start_y": data["start_y"],
-            "end_page": len(reader.pages) - 1,
+            "end_page": end_p,
             "end_y": None
         }
-        
+
         if idx < len(nums) - 1:
             next_num = nums[idx + 1]
             next_data = validated_questions[next_num]
             next_page = next_data["start_page"]
-            
-            # The next question starts on a later page: the current question can occupy
-            # up to the page immediately before it (continuation pages in between are kept).
-            if next_page > data["start_page"]:
-                prev_page = next_page - 1
-                while prev_page in skip_pages and prev_page > 0:
-                    prev_page -= 1
-                questions[num]["end_page"] = prev_page
-                questions[num]["end_y"] = None
+
+            if _is_mcq_paper(subject_code, comp_var):
+                # Single-column MCQ papers: each question lives on its own page
+                # (or, when two share a page, the current one ENDS at the next
+                # question's top). If the next question starts on a different
+                # page, snap the boundary to the PAGE EDGE — do NOT crop at the
+                # next question's top, or the crop at y≈769 would wipe the whole
+                # page. Only crop mid-page when both questions share one page.
+                if next_data["start_page"] == data["start_page"]:
+                    questions[num]["end_page"] = next_page
+                    questions[num]["end_y"] = next_data["start_y"]
+                else:
+                    prev_page = next_page - 1
+                    while prev_page in skip_pages and prev_page > 0:
+                        prev_page -= 1
+                    questions[num]["end_page"] = prev_page
+                    questions[num]["end_y"] = None
             else:
-                # The next question starts on the SAME page: cut the current question off
-                # just above where the next question begins (enables bottom cropping in render).
-                questions[num]["end_page"] = next_page
-                questions[num]["end_y"] = next_data["start_y"]
-                
+                # Theory papers: If the next question starts on the same page,
+                # crop just above it. If on a different page, we can't reliably
+                # use its y-value as an end boundary (it belongs to a different
+                # page), so end at the bottom of the last non-skip page before
+                # the next question.
+                if next_page == data["start_page"]:
+                    questions[num]["end_page"] = next_page
+                    questions[num]["end_y"] = next_data["start_y"]
+                else:
+                    end_p = next_page - 1
+                    while end_p in skip_pages and end_p > data["start_page"]:
+                        end_p -= 1
+                    questions[num]["end_page"] = end_p
+                    questions[num]["end_y"] = None
     # Extract text content for each question bounded range
     for q_num, data in questions.items():
         combined_text = ""
@@ -406,7 +598,7 @@ def parse_question_boundaries(reader, subject_code=None, comp_var=None):
         
     return questions
 
-def create_page_overlay(subject_code, year, series, comp_var, q_num, orig_width, orig_height, diagnostic_info=None, draw_banner=False, banner_y=None, draw_red_line_at=None, draw_green_line=False):
+def create_page_overlay(subject_code, year, series, comp_var, q_num, orig_width, orig_height, diagnostic_info=None, draw_banner=False, banner_y=None, draw_red_line_at=None, draw_green_line=False, draw_green_line_at=None):
     """Generates a text banner overlay and separation lines for extracted pages."""
     packet = io.BytesIO()
     can = canvas.Canvas(packet, pagesize=(orig_width, orig_height))
@@ -419,9 +611,11 @@ def create_page_overlay(subject_code, year, series, comp_var, q_num, orig_width,
         year_short = str(year)[-2:]
         text = f"Source: {subject_code} / {series}{year_short} / qp_{comp_var} — Question {q_num}"
         
-        # Erase original header / page numbers under the banner
+        # Erase original header / page numbers above the banner only.
+        # Do NOT extend below the banner, or it will wipe question content
+        # that starts just under the banner strip.
         can.setFillColorRGB(1, 1, 1)
-        can.rect(0, banner_y - 20, orig_width, orig_height - (banner_y - 20), fill=1, stroke=0)
+        can.rect(0, banner_y + 25, orig_width, orig_height - (banner_y + 25), fill=1, stroke=0)
         
         can.setFillColorRGB(1, 1, 1)
         if diagnostic_info and st.session_state.get('diagnostic_mode', False):
@@ -448,8 +642,11 @@ def create_page_overlay(subject_code, year, series, comp_var, q_num, orig_width,
         elif draw_green_line:
             can.setStrokeColorRGB(0, 0.8, 0) # Bright Green
             can.setLineWidth(4)
-            # Draw at Y=45 (above footer margin)
-            can.line(0, 45, orig_width, 45)
+            if draw_green_line_at is not None:
+                can.line(0, draw_green_line_at, orig_width, draw_green_line_at)
+            else:
+                # Draw at Y=45 (above footer margin)
+                can.line(0, 45, orig_width, 45)
         
     can.save()
     packet.seek(0)
@@ -1131,24 +1328,34 @@ if submit_button:
                                         if data["start_y"] <= orig_height - 100:
                                             crop_top = data["start_y"] + 40
                                             
-                                    # End-page: crop below the question's end_y (if mid-page end)
-                                    if p_num == data["end_page"] and data.get("end_y") is not None:
-                                        # In PDF coordinates, Y=0 is the bottom. To slice off the next question 
-                                        # (which starts at end_y and goes downwards), we set our crop box's bottom 
-                                        # boundary slightly ABOVE end_y.
-                                        crop_bottom = data["end_y"] + 20
-                                        
-                                    # Apply crop to all bounding boxes to guarantee the viewer respects it
-                                    rect = RectangleObject([
-                                        float(mb.left),
-                                        crop_bottom,
-                                        float(mb.right),
-                                        crop_top
-                                    ])
-                                    p_obj.mediabox = rect
-                                    p_obj.cropbox = rect
-                                    p_obj.trimbox = rect
-                                    p_obj.artbox = rect
+                                # End-page: crop below the question's end_y (if mid-page end)
+                                if p_num == data["end_page"] and data.get("end_y") is not None:
+                                    # In PDF coordinates, Y=0 is the bottom. To slice off the next question 
+                                    # (which starts at end_y and goes downwards), we set our crop box's bottom 
+                                    # boundary slightly ABOVE end_y.
+                                    crop_bottom = data["end_y"] + 20
+                                
+                                # Apply crop to all bounding boxes to guarantee the viewer respects it
+                                rect = RectangleObject([
+                                    float(mb.left),
+                                    crop_bottom,
+                                    float(mb.right),
+                                    crop_top
+                                ])
+                                p_obj.mediabox = rect
+                                p_obj.cropbox = rect
+                                p_obj.trimbox = rect
+                                p_obj.artbox = rect
+                                
+                                # Force standard A4 page size for output consistency
+                                a4_width, a4_height = A4
+                                a4_rect = RectangleObject([
+                                    0,
+                                    0,
+                                    a4_width,
+                                    a4_height
+                                ])
+                                p_obj.mediabox = a4_rect
                                 
                                 # Draw banner only on the first page of the question
                                 draw_banner = (p_num == data["start_page"])
@@ -1177,7 +1384,8 @@ if submit_button:
                                         draw_banner=draw_banner,
                                         banner_y=banner_y,
                                         draw_red_line_at=draw_red,
-                                        draw_green_line=draw_green
+                                        draw_green_line=draw_green,
+                                        draw_green_line_at=crop_bottom + 5 if draw_green else None
                                     )
                                     overlay_reader = PdfReader(overlay_pdf)
                                     overlay_page = overlay_reader.pages[0]
