@@ -168,13 +168,14 @@ def parse_question_boundaries(reader, subject_code="0620", comp_var="11"):
                 questions[num]["end_page"] = end_p
                 questions[num]["end_y"] = None
 
-        # Simulate crop boundaries
+        # Simulate crop boundaries (use questions[num] which has end_y)
         crop_bottom = 0
         crop_top = 842
-        if data.get("start_y") is not None and data["start_y"] <= 742:
-            crop_top = data["start_y"] + 40
-        if data.get("end_y") is not None:
-            crop_bottom = data["end_y"] + 20
+        q_data = questions[num]
+        if q_data.get("start_y") is not None and q_data["start_y"] <= 742:
+            crop_top = q_data["start_y"] + 40
+        if q_data.get("end_y") is not None:
+            crop_bottom = q_data["end_y"] + 20
 
         questions[num]["crop_bottom"] = crop_bottom
         questions[num]["crop_top"] = crop_top
