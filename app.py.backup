@@ -5,12 +5,10 @@ import time
 import re
 import json
 import os
-import yaml
 from pypdf import PdfWriter, PdfReader
 from pypdf.generic import RectangleObject
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
-from metadata import load_metadata, get_paper_metadata, get_available_metadata_subjects, get_metadata_years
 
 # --- CONFIGURATION ---
 CONFIG_FILE = "user_config.json"
@@ -78,214 +76,6 @@ MATH_0606_TOPICS = {
         r'\b[A-Z]{2}\b'
     ]
 }
-
-# --- FIXED TOPICAL TOPICS PER SUBJECT ---
-PHYSICS_TOPICS = {
-    "1. Measurements and Units": ["micrometer", "screw gauge", "vernier", "caliper", "stopwatch", "measuring cylinder", "parallax error", "si units", "zero error"],
-    "2. Speed, Velocity and Acceleration": ["acceleration of free fall", "terminal velocity", "speed-time graph", "distance-time graph", "gradient of the line", "area under the graph", "deceleration", "constant speed"],
-    "3. Mass, Weight and Density": ["gravitational field strength", "w = mg", "inertia", "electronic balance", "density of the liquid", "hydrometer", "mass of the object"],
-    "4. Forces and Hooke’s Law": ["hooke's law", "limit of proportionality", "spring constant", "extension of the spring", "load-extension", "resultant force", "friction", "air resistance"],
-    "5. Turning Effects and Moments": ["moment of a force", "pivot", "clockwise moment", "anticlockwise moment", "perpendicular distance from the pivot", "principle of moments", "equilibrium"],
-    "6. Centre of Gravity": ["centre of gravity", "stability", "topple", "plumbline", "lamina", "freely suspended", "base area"],
-    "7. Momentum and Impulse": ["impulse", "momentum", "collision", "conservation of momentum", "recoil", "mv - mu", "force = change in momentum"],
-    "8. Energy, Work and Power": ["kinetic energy", "gravitational potential energy", "work done", "power output", "efficiency =", "renewable energy", "non-renewable", "chemical energy", "elastic energy"],
-    "9. Pressure": ["pressure = force", "pascal", "barometer", "manometer", "p = hg", "atmospheric pressure", "mercury column", "liquid pressure"],
-    "10. Kinetic Particle Model": ["kinetic particle", "brownian motion", "evaporation", "cooling effect", "molecular structure", "solids", "liquids and gases", "smoke particles", "random motion"],
-    "11. Thermal Properties and Expansion": ["thermal expansion", "bimetallic", "fixed points", "liquid-in-glass", "thermocouple", "specific heat capacity", "specific latent heat", "fusion", "vaporisation"],
-    "12. Conduction, Convection and Radiation": ["conduction", "convection current", "thermal radiation", "infra-red radiation", "black surface", "shiny surface", "emitter", "absorber", "insulator"],
-    "13. Properties of Waves": ["transverse wave", "longitudinal wave", "wavefront", "wavelength", "v = f", "crest", "trough", "compression", "rarefaction", "diffraction"],
-    "14. Light and Lenses": ["refractive index", "critical angle", "total internal reflection", "converging lens", "principal focus", "focal length", "real image", "virtual image", "ray diagram", "snell's law"],
-    "15. Electromagnetic Spectrum": ["ultraviolet", "infra-red", "microwaves", "radio waves", "x-rays", "gamma rays", "speed of light in a vacuum", "monochromatic"],
-    "16. Sound Waves": ["echo", "ultrasound", "pitch", "loudness", "audible frequency range", "speed of sound", "vibrations"],
-    "17. Magnetism": ["magnetic field lines", "induced magnetism", "permanent magnet", "electromagnet", "soft iron core", "demagnetised", "repulsion"],
-    "18. Electricity and Circuits": ["electric charge", "current =", "potential difference", "electromotive force", "e.m.f.", "p.d.", "resistance =", "ohm's law", "ammeter", "voltmeter", "series circuit", "parallel circuit", "thermistor", "light-dependent resistor", "ldr", "diode", "potentiometer", "variable resistor", "current-voltage characteristic", "fuse", "circuit-breaker", "earthing", "earth wire", "live wire", "neutral wire", "double insulation"],
-    "19. Electromagnetic Induction": ["electromagnetic induction", "induced e.m.f.", "faraday's law", "lenz's law", "fleming's left-hand rule", "fleming's right-hand rule", "ac generator", "slip rings", "split-ring commutator"],
-    "20. Transformers": ["step-up transformer", "step-down transformer", "turns ratio", "vp/vs", "primary coil", "secondary coil", "eddy currents"],
-    "21. Atomic Structure and Isotopes": ["proton number", "nucleon number", "alpha-particle scattering", "rutherford", "nuclide notation", "isotopes", "neutrons"],
-    "22. Radioactivity and Half-Life": ["alpha radiation", "beta particles", "gamma emission", "half-life", "background radiation", "geiger-muller", "gm tube", "radioactive decay"],
-    "23. Earth and Solar System": ["orbital speed", "light from the sun", "phases of the moon", "axis of the earth", "solar system", "milky way galaxy"],
-    "24. Stars and Universe": ["redshift", "hubble constant", "big bang theory", "cosmic microwave background", "cmbr", "nebula", "stable star", "supernova"]
-}
-
-BIOLOGY_TOPICS = {
-    "1. Classification": ["kingdom", "species", "genus", "p/dichotomous key", "p/binomial", "arthropods", "vertebrates", "flowering plants", "monocotyledons", "dicotyledons"],
-    "2. Cell Structure": ["cytoplasm", "cell membrane", "cell wall", "chloroplast", "vacuole", "mitochondria", "ribosomes", "p/magnification", "actual size", "image size"],
-    "3. Movement": ["p/diffusion", "p/osmosis", "p/active transport", "concentration gradient", "water potential", "turgid", "flaccid", "plasmolysis", "carrier proteins"],
-    "4. Molecules": ["carbohydrate", "glycogen", "p/iodine test", "p/benedict", "p/biuret test", "ethanol emulsion", "double helix", "base pairing", "starch", "amino acids", "lipids"],
-    "5. Enzymes": ["active site", "substrate molecule", "p/denatured", "optimum temperature", "optimum pH", "enzyme-substrate complex", "p/catalyst"],
-    "6. Plant Nutrition": ["p/photosynthesis", "chlorophyll", "stomata", "palisade mesophyll", "spongy mesophyll", "limiting factor", "xylem", "guard cells", "nitrate deficiency"],
-    "7. Human Nutrition": ["p/malnutrition", "p/alimentary canal", "ingestion", "mechanical digestion", "chemical digestion", "peristalsis", "p/villi", "absorption", "assimilation", "egestion"],
-    "8. Plant Transport": ["p/xylem", "p/phloem", "p/transpiration", "p/translocation", "root hair cells", "potometer", "humidity", "wilting", "vascular bundle"],
-    "9. Circulation": ["p/double circulation", "atrium", "ventricle", "bicuspid valve", "tricuspid valve", "semi-lunar", "artery", "vein", "capillary", "plasma", "platelets", "p/coronary heart disease"],
-    "10. Immunity": ["p/pathogen", "transmissible disease", "active immunity", "passive immunity", "p/antibody", "antigens", "p/vaccination", "phagocytosis", "lymphocytes"],
-    "11. Gas Exchange": ["alveoli", "bronchus", "trachea", "larynx", "intercostal muscles", "p/aerobic respiration", "p/anaerobic respiration", "oxygen debt", "lactic acid", "limewater test"],
-    "12. Excretion": ["p/excretion", "p/urea", "deamination", "kidney", "p/nephron", "glomerulus", "collecting duct", "ureter", "urethra", "bladder", "p/dialysis"],
-    "13. Nervous Control": ["central nervous system", "neurone", "p/reflex arc", "p/synapse", "neurotransmitter", "cornea", "iris", "pupil", "ciliary muscles", "p/accommodation"],
-    "14. Hormones": ["endocrine gland", "adrenaline", "p/insulin", "glucagon", "p/homeostasis", "negative feedback", "vasoconstriction", "vasodilation", "blood glucose"],
-    "15. Tropisms": ["p/phototropism", "p/gravitropism", "p/auxin", "cell elongation", "geotropism", "unilateral light"],
-    "16. Drugs": ["p/antibiotic resistance", "p/heroin", "depressant", "nicotine", "tobacco smoke", "tar", "carbon monoxide", "liver cirrhosis"],
-    "17. Reproduction": ["p/asexual reproduction", "p/sexual reproduction", "sepals", "petals", "anther", "stigma", "pollination", "p/menstrual cycle", "p/placenta", "prostate gland", "oviduct", "zygote"],
-    "18. Inheritance": ["p/mitosis", "p/meiosis", "diploid", "haploid", "p/allele", "dominant", "recessive", "homozygous", "heterozygous", "genotype", "phenotype", "p/monohybrid cross"],
-    "19. Variation": ["continuous variation", "discontinuous variation", "p/mutation", "p/natural selection", "artificial selection", "p/evolution", "adaptive feature"],
-    "20. Ecosystems": ["food web", "trophic level", "producer", "primary consumer", "decomposer", "p/carbon cycle", "p/nitrogen cycle", "p/eutrophication", "greenhouse gases"]
-}
-
-ADDITIONAL_MATH_TOPICS = {
-    "Functions and Quadratics": ["p/f ( x )", "p/g ( x )", "p/f - 1", "domain", "range", "modulus", "discriminant", "nature of the roots", "factor theorem", "remainder theorem"],
-    "Logarithmic & Exponential": ["p/ln", "p/log", "p/e ^ x", "log", "exponential"],
-    "Circular Measure": ["p/radian", "arc length", "sector", "subtends", "rad", "perimeter of the shaded", "area of the shaded", "θ", "π"],
-    "Trigonometry": ["p/sin", "p/cos", "p/tan", "p/sec", "p/csc", "p/cot", "sin^2", "cos^2", "tan^2", "trigonometric ratio", "identity", "amplitude", "period", "°"],
-    "Permutations & Series": ["p/progression", "series", "binomial", "permutation", "combination", "common difference", "common ratio", "sum to infinity"],
-    "Coordinate Geometry & Vectors": ["p/perpendicular", "p/parallel", "midpoint", "intersect", "position vector", "magnitude", "velocity", "collinear"],
-    "Calculus": ["p/d . x", "p/d y / d x", "p/d x / d t", "p/d^2 y / d x^2", "p/∫", "integrat", "differentiat", "derived", "rate of change", "stationary point", "turning point", "tangent", "normal"]
-}
-
-EXTENDED_MATH_TOPICS = {
-    "Number": ["p/prime factors", "HCF", "LCM", "p/compound interest", "simple interest", "appreciation", "depreciation", "ratio", "proportion", "percentage", "p/standard form"],
-    "Algebra": ["p/expand brackets", "factorise", "simplify", "linear equation", "p/simultaneous equations", "p/inequalities", "y = mx + c", "p/quadratic formula", "p/completing the square", "parabola"],
-    "Functions & Sequences": ["p/nth term", "p/composite function", "f(x)", "inverse function", "arithmetic progression", "geometric progression"],
-    "Coordinate Geometry": ["p/gradient", "p/midpoint", "length", "perpendicular", "parallel", "intersection"],
-    "Geometry": ["p/circle theorem", "alternate segment", "cyclic quadrilateral", "tangency", "p/congruence", "p/similarity", "polygons", "interior angle"],
-    "Trigonometry": ["p/sine rule", "p/cosine rule", "p/pythagoras", "sohcahtoa", "bearing", "3d trigonometry", "°"],
-    "Mensuration & Vectors": ["p/volume", "p/surface area", "p/arc length", "p/sector area", "π", "p/vectors", "magnitude", "resultant vector"],
-    "Probability & Statistics": ["p/probability tree", "p/cumulative frequency", "p/histogram", "mean", "median", "mode", "quartile range", "frequency density"]
-}
-
-DESIGN_TECH_TOPICS = {
-    "1. Design and Modeling": ["p/design specification", "p/anthropometrics", "p/ergonomics", "p/orthographic projection", "p/isometric drawing", "p/rendering"],
-    "2. Materials and Processes": ["p/smart materials", "p/polymerisation", "p/heat treatment", "p/resistant materials", "ferrous", "non-ferrous"],
-    "3. Systems and Structures": ["p/mechanism", "p/cams", "p/gears", "p/tension", "p/compression", "logic gates", "p/electronics"],
-    "4. Industry and Environment": ["p/lifecycle analysis", "p/sustainability", "p/cad/cam", "rapid prototyping", "mass production"]
-}
-
-ECONOMICS_TOPICS = {
-    "1. Scarcity and Opportunity Cost": ["p/scarcity", "p/opportunity cost", "finite", "infinite", "wants", "choices"],
-    "2. Factors of Production": ["p/factors of production", "land", "labour", "capital", "enterprise", "rent", "wages", "interest", "profit", "mobility"],
-    "3. Production Possibility Curves": ["p/ppc", "curve", "frontier", "shift", "growth", "capacity", "efficiency"],
-    "4. Demand and Supply Equilibrium": ["p/demand", "p/supply", "p/equilibrium", "shortage", "surplus", "price", "mechanism", "shift", "movement"],
-    "5. Price Elasticity of Demand": ["p/ped", "elastic", "inelastic", "revenue", "unitary", "determinants"],
-    "6. Price Elasticity of Supply": ["p/pes", "elastic", "inelastic", "time", "period", "capacity", "stocks"],
-    "7. Market Failure and Subsidies": ["p/market failure", "p/subsidies", "tax", "externalities", "social", "benefit", "cost", "public", "merit", "demerit"],
-    "8. Money and Banking": ["p/money", "p/banking", "central", "commercial", "bank", "functions", "barter", "interest", "rates"],
-    "9. Wages and Labor Markets": ["p/wages", "earnings", "labour", "market", "supply", "demand", "minimum", "wage", "specialisation"],
-    "10. Trade Unions": ["p/trade unions", "collective", "bargaining", "industrial", "action", "strike"],
-    "11. Economies of Scale": ["p/economies of scale", "diseconomies", "internal", "external", "average", "cost", "growth"],
-    "12. Costs, Revenue and Profit": ["p/costs", "p/revenue", "p/profit", "fixed", "variable", "total", "average", "breakeven"],
-    "13. Perfect Competition and Monopoly": ["p/perfect competition", "p/monopoly", "barriers", "entry", "price", "taker", "maker"],
-    "14. Fiscal and Monetary Policy": ["p/fiscal policy", "p/monetary policy", "taxation", "spending", "interest", "rate", "money", "supply"],
-    "15. Supply Side Policies": ["p/supply-side policies", "deregulation", "privatisation", "education", "training", "subsidies"],
-    "16. Inflation and Unemployment": ["p/inflation", "p/unemployment", "deflation", "cpi", "employment", "frictional", "structural", "cyclical"],
-    "17. GDP and Living Standards": ["p/gdp", "p/living standards", "hdi", "growth", "real", "nominal", "capita"],
-    "18. Absolute and Relative Poverty": ["p/poverty", "absolute", "relative", "income", "distribution", "equity"],
-    "19. Population Dynamics": ["p/population dynamics", "birth", "rate", "death", "migration", "ageing", "dependency", "ratio"],
-    "20. Tariffs and Free Trade": ["p/tariffs", "p/free trade", "quota", "quotas", "protectionism", "embargo"],
-    "21. Foreign Exchange Rates": ["p/exchange rates", "floating", "fixed", "depreciation", "appreciation", "devaluation"],
-    "22. Balance of Payments": ["p/balance of payments", "current", "account", "deficit", "surplus", "export", "import"]
-}
-
-CHEMISTRY_TOPICS = {
-    "1. States of Matter and Diffusion": ["states of matter", "sublimation", "heating curve", "cooling curve", "particles in a solid", "condensation", "evaporation", "p/diffusion", "molecular mass", "random motion", "gas particles"],
-    "2. Elements, Compounds and Mixtures": ["element", "compound", "mixture", "pure substance", "homogeneous", "heterogeneous", "fixed melting point", "range of boiling points"],
-    "3. Atomic Structure and Isotopes": ["proton number", "nucleon number", "electron shell", "electronic configuration", "subatomic particles", "nucleus of the atom", "p/isotope", "p/isotopes", "relative abundance", "mass number"],
-    "4. Ionic Bonding": ["p/ionic bond", "p/ionic bonding", "electrostatic attraction", "transfer of electrons", "giant ionic lattice", "cation", "anion", "magnesium oxide", "sodium chloride"],
-    "5. Covalent Bonding": ["p/covalent bond", "p/covalent bonding", "sharing of electrons", "single covalent", "double covalent", "triple covalent", "simple molecules", "giant covalent", "diamond lattice", "graphite layers", "silicon(iv) oxide", "macromolecule", "allotrope"],
-    "6. Metallic Bonding": ["p/metallic bonding", "lattice of positive ions", "delocalised electrons", "sea of electrons", "malleable", "ductile", "electrical conductivity of metals"],
-    "7. Chemical Formulae and Masses": ["empirical formula", "molecular formula", "balanced chemical equation", "ionic equation", "valency", "relative atomic mass", "relative molecular mass", "ar", "mr", "state symbols"],
-    "8. The Mole and Stoichiometry": ["p/avogadro constant", "number of moles", "molar gas volume", "24 dm3", "stoichiometry", "percentage yield", "theoretical yield", "limiting reactant", "concentration in mol/dm3", "molar mass"],
-    "9. Electrolysis": ["p/electrolysis", "p/electrolyte", "anode", "cathode", "inert electrodes", "molten lead(ii) bromide", "aqueous copper(ii) sulfate", "p/electroplating", "bauxite extraction", "brine electrolysis"],
-    "10. Hydrogen Fuel Cells": ["p/hydrogen fuel cell", "fuel cells", "chemical energy to electrical energy", "clean fuel", "hydrogen-oxygen cell", "cell equation"],
-    "11. Chemical Energetics": ["p/exothermic reaction", "p/endothermic reaction", "enthalpy change", "activation energy", "energy profile diagram", "bond breaking takes in", "bond making releases"],
-    "12. Rate of Reaction": ["rate of reaction", "collision theory", "successful collisions", "activation energy barrier", "catalyst", "concentration effect", "surface area effect", "photochemical reaction"],
-    "13. Reversible Reactions and Equilibrium": ["reversible reaction", "dynamic equilibrium", "position of equilibrium", "p/le chatelier", "p/haber process", "p/contact process", "iron catalyst", "vanadium(v) oxide"],
-    "14. Redox Reactions": ["p/redox", "oxidation number", "oxidation state", "oxidising agent", "reducing agent", "p/acidified potassium manganate(vii)", "potassium iodide test", "reduction is gain"],
-    "15. Acids and Bases": ["proton donor", "proton acceptor", "amphoteric oxide", "acidic oxide", "basic oxide", "neutral oxide", "ph scale", "universal indicator", "titration", "neutralisation reaction"],
-    "16. Preparation of Salts": ["salt preparation", "insoluble salt", "soluble salt", "precipitation method", "filtration", "crystallisation", "excess insoluble base"],
-    "17. Periodic Table Trends": ["group properties", "period trends", "alkali metals", "halogens", "noble gases", "reactivity increases down", "shielding effect"],
-    "18. Transition Elements": ["transition elements", "variable oxidation states", "coloured compounds", "high densities", "catalytic behavior"],
-    "19. Properties and Reactivity of Metals": ["reactivity series", "displacement reaction", "carbon reduction", "ease of extraction", "alloy", "brass composition", "stainless steel", "sacrificial protection", "galvanising", "rusting of iron"],
-    "20. Water and Air Chemistry": ["water treatment", "anhydrous copper(ii) sulfate", "cobalt(ii) chloride paper", "clean dry air", "nitrogen oxides", "catalytic converter", "greenhouse gas", "global warming", "unburnt hydrocarbons"],
-    "21. Homologous Series and Organic Naming": ["homologous series", "functional group", "general formula", "structural isomerism", "p/iupac nomenclature", "meth-", "eth-", "prop-", "but-"],
-    "22. Alkanes and Alkenes": ["p/alkane", "p/alkene", "saturated hydrocarbon", "unsaturated hydrocarbon", "substitution reaction", "addition reaction", "catalytic cracking", "bromine water test", "poly(ethene)"],
-    "23. Alcohols and Carboxylic Acids": ["p/ethanol fermentation", "hydration of ethene", "carboxylic acid", "ethanoic acid", "p/esterification", "ester link", "ethyl ethanoate", "functional group -oh", "-cooh"],
-    "24. Polymers": ["p/polymerisation", "monomer", "addition polymer", "condensation polymer", "p/nylon", "p/terylene", "protein linkage", "amide link", "ester linkage", "plastics pollution"],
-    "25. Separation and Purification": ["p/chromatography", "rf value", "locating agent", "simple distillation", "fractional distillation", "separating funnel", "residue", "filtrate"],
-    "26. Qualitative Analysis": ["qualitative analysis", "flame test", "cation test", "anion test", "gas identification", "aqueous sodium hydroxide", "aqueous ammonia", "white precipitate", "gas pops", "limewater turns milky"]
-}
-
-ACCOUNTING_TOPICS = {
-    "1. Purpose and Accounting Equation": ["p/accounting equation", "purpose", "assets", "liabilities", "capital", "equity", "bookkeeping"],
-    "2. Double Entry Ledger Bookkeeping": ["p/double entry", "ledger", "account", "debit", "credit", "dr", "cr", "t-account", "post"],
-    "3. Business Documents and Invoices": ["p/invoices", "invoice", "credit", "note", "debit", "receipt", "statement", "transaction", "source"],
-    "4. Cash Book and Journals": ["p/cash book", "p/journals", "journal", "discount", "allowed", "received", "bank", "column"],
-    "5. Petty Cash Book": ["p/petty cash book", "imprest", "float", "voucher", "analysis", "columns"],
-    "6. Trial Balance": ["p/trial balance", "agree", "errors", "draft"],
-    "7. Correction of Errors": ["p/correction of errors", "suspense", "omission", "commission", "principle", "reversal", "compensating", "original", "entry"],
-    "8. Bank Reconciliation Statements": ["p/bank reconciliation", "statement", "unpresented", "cheque", "deposit", "cleared", "standing", "order"],
-    "9. Control Accounts": ["p/control accounts", "sales", "purchase", "ledger", "contra", "set-off", "reconciliation"],
-    "10. Capital and Revenue Expenditure": ["p/capital expenditure", "p/revenue expenditure", "receipts", "error", "overstated", "understated"],
-    "11. Depreciation and Asset Disposal": ["p/depreciation", "p/asset disposal", "straight-line", "reducing-balance", "provision", "residual", "cost"],
-    "12. Accruals and Prepayments": ["p/accruals", "p/prepayments", "accrued", "prepaid", "outstanding", "advance", "expense", "income"],
-    "13. Bad Debts and Allowances": ["p/bad debts", "irrecoverable", "allowance", "doubtful", "recovered", "written", "off"],
-    "14. Inventory Valuation": ["p/inventory valuation", "fifo", "avco", "cost", "net", "realisable", "value"],
-    "15. Sole Trader Income Statement": ["p/income statement", "sole", "trader", "trading", "profit", "gross", "net", "cost", "sales", "revenue"],
-    "16. Statement of Financial Position": ["p/statement of financial position", "balance", "sheet", "non-current", "current", "working", "capital"],
-    "17. Partnership Accounts": ["p/partnership accounts", "appropriation", "current", "capital", "interest", "drawings", "salary", "share"],
-    "18. Limited Company Accounts": ["p/limited company", "shares", "dividend", "retained", "earnings", "debentures", "reserves"],
-    "19. Manufacturing Accounts": ["p/manufacturing accounts", "prime", "cost", "factory", "overhead", "work-in-progress", "wip", "production"],
-    "20. Clubs and Societies Accounts": ["p/clubs and societies", "receipts", "payments", "income", "expenditure", "surplus", "deficit", "subscription"],
-    "21. Incomplete Records": ["p/incomplete records", "statement", "affairs", "markup", "margin", "opening", "capital"],
-    "22. Profitability and Liquidity Ratios": ["p/accounting ratios", "margin", "markup", "roce", "current", "liquid", "acid-test", "rate", "turnover"],
-    "23. Accounting Concepts and Ethics": ["p/accounting concepts", "ethics", "prudence", "going", "concern", "consistency", "matching", "materiality", "objectivity"]
-}
-
-SUBJECT_TOPICS = {
-    "0610": BIOLOGY_TOPICS,
-    "0625": PHYSICS_TOPICS,
-    "0620": CHEMISTRY_TOPICS,
-    "0606": ADDITIONAL_MATH_TOPICS,
-    "0580": EXTENDED_MATH_TOPICS,
-    "0445": DESIGN_TECH_TOPICS,
-    "0455": ECONOMICS_TOPICS,
-    "0452": ACCOUNTING_TOPICS,
-}
-
-def _norm_topic(s):
-    return re.sub(r'[^a-z0-9 ]', '', str(s).lower()).strip()
-
-def topic_matches(meta_topic, selected_heading):
-    """Match a metadata question topic against a selected topic heading.
-
-    Handles the 'N. Topic Name' numbering and accepts either the full
-    heading or just the topic name on either side."""
-    if not meta_topic or not selected_heading:
-        return False
-    meta_topic = str(meta_topic).strip()
-    selected_heading = str(selected_heading).strip()
-    if meta_topic == selected_heading:
-        return True
-    def strip_num(t):
-        return re.sub(r'^\s*\d+\s*\.\s*', '', t).strip()
-    m = _norm_topic(strip_num(meta_topic))
-    s = _norm_topic(strip_num(selected_heading))
-    if m and s and (m == s or m in s or s in m):
-        return True
-    return False
-
-def keyword_patterns(keywords):
-    """Convert a topic's keyword list into regex patterns.
-
-    Items prefixed with 'p/' are used verbatim as regex; others are
-    wrapped in word boundaries for plain substring matching."""
-    pats = []
-    for kw in keywords:
-        kw = str(kw).strip()
-        if not kw:
-            continue
-        if kw.startswith("p/"):
-            pats.append(kw[2:])
-        else:
-            pats.append(r'\b' + re.escape(kw) + r'\b')
-    return pats
 
 BASE_URL = "https://pastpapers.papacambridge.com/directories/CAIE/CAIE-pastpapers/upload/"
 HEADERS = {
@@ -521,12 +311,8 @@ def get_leftmost_candidates(page, page_num):
                 })
     return candidates
 
-def parse_question_boundaries(reader, subject_code=None, comp_var=None, paper_metadata=None):
-    """Parses PDF pages to find structural question boundaries.
-    
-    If paper_metadata is provided, it is used as the source of truth for
-    question boundaries. Missing page information is resolved from the PDF.
-    """
+def parse_question_boundaries(reader, subject_code=None, comp_var=None):
+    """Parses PDF pages to find structural question boundaries."""
     questions = {}
     
     # Build set of skippable formula pages
@@ -534,84 +320,8 @@ def parse_question_boundaries(reader, subject_code=None, comp_var=None, paper_me
     for page_num in range(len(reader.pages)):
         if _is_formula_page(reader, page_num, subject_code, comp_var):
             skip_pages.add(page_num)
-    
-    is_mcq = _is_mcq_paper(subject_code, comp_var)
-    
-    # ── METADATA BRANCH ────────────────────────────────────────────────────────
-    if paper_metadata:
-        # Try to resolve missing page info from PDF
-        all_candidates = []
-        for page_num in range(1, len(reader.pages)):
-            if page_num in skip_pages:
-                continue
-            all_candidates.extend(get_leftmost_candidates(reader.pages[page_num], page_num))
-        
-        # Build page->y mapping for questions with start_y but no start_page
-        y_to_page = {}
-        for c in all_candidates:
-            y_to_page[c["y"]] = c["page"]
-        
-        for q_num, meta in paper_metadata.items():
-            start_page = meta.get("start_page")
-            end_page = meta.get("end_page")
-            start_y = meta.get("start_y")
-            end_y = meta.get("end_y")
             
-            if start_page is None and start_y is not None:
-                start_page = y_to_page.get(start_y)
-                if start_page is None:
-                    for c in all_candidates:
-                        if abs(c["y"] - start_y) < 5:
-                            start_page = c["page"]
-                            break
-            
-            if start_page is None:
-                continue
-            
-            if end_page is None:
-                end_page = len(reader.pages) - 1
-                while end_page in skip_pages and end_page > start_page:
-                    end_page -= 1
-            
-            questions[int(q_num)] = {
-                "start_page": start_page,
-                "start_y": start_y,
-                "end_page": end_page,
-                "end_y": end_y,
-                "text": ""
-            }
-        
-        if questions:
-            nums = sorted(questions.keys())
-            for idx, num in enumerate(nums):
-                data = questions[num]
-                if idx < len(nums) - 1:
-                    next_num = nums[idx + 1]
-                    next_data = questions[next_num]
-                    next_page = next_data["start_page"]
-                    if next_page == data["start_page"] and next_data.get("start_y") is not None:
-                        data["end_page"] = next_page
-                        data["end_y"] = next_data["start_y"]
-                    elif next_page > data["start_page"]:
-                        end_p = next_page - 1
-                        while end_p in skip_pages and end_p > data["start_page"]:
-                            end_p -= 1
-                        data["end_page"] = end_p
-                        data["end_y"] = None
-            
-            for q_num, data in questions.items():
-                combined_text = ""
-                for p in range(data["start_page"], data["end_page"] + 1):
-                    if p in skip_pages:
-                        continue
-                    page_text = reader.pages[p].extract_text()
-                    if page_text:
-                        combined_text += page_text + "\n"
-                data["text"] = combined_text
-            
-            return questions
-    
-    # ── AUTOMATIC PARSING (fallback when no metadata) ─────────────────────────
+    # Pass 1: Extract all leftmost candidates
     all_candidates = []
     for page_num in range(1, len(reader.pages)):
         if page_num in skip_pages:
@@ -1421,55 +1131,44 @@ with comp_col:
 app_mode = st.radio("Select Generation Mode", ["Full Booklet Mode", "Topical Question Bank Mode"], horizontal=True)
 is_topical = (app_mode == "Topical Question Bank Mode")
 
-selected_topic = ""
-
-# ---- Inputs (defined before the topical pre-check so they are available below) ----
-current_year = 2024
-years = st.slider("Years Selection", min_value=2015, max_value=current_year, value=(2020, 2023))
-series_options = {"m": "Feb/March (m)", "s": "May/June (s)", "w": "Oct/Nov (w)"}
-selected_series = st.multiselect(
-    "Exam Series",
-    options=list(series_options.keys()),
-    format_func=lambda x: series_options[x],
-    default=user_config.get("default_series", ["s", "w"])
-)
-selected_variants = st.multiselect(
-    "Variants (For May/June & Oct/Nov)",
-    options=[1, 2, 3],
-    default=user_config.get("default_variants", [1, 2, 3])
-)
-
-metadata = load_metadata()
-
+selected_math_topic = ""
+keyword = ""
 if is_topical:
-    has_meta_topics = any(
-        get_paper_metadata(metadata, SUBJECT_MAPPING[subject_name], y, s, f"{paper_component}{v}").get(q, {}).get("topic")
-        for y in range(years[0], years[1] + 1)
-        for s in selected_series
-        for v in ([2] if s == "m" else selected_variants)
-        for q in range(1, 30)
-    )
-    if has_meta_topics:
-        st.info("Topical Mode: Using metadata topics to match the selected topic. Auto-detection is disabled.")
+    st.info("Topical Mode: We will scan papers for your keywords and extract only matching questions.")
+    if SUBJECT_MAPPING[subject_name] == "0606":
+        selected_math_topic = st.selectbox("Select Additional Mathematics Topic", list(MATH_0606_TOPICS.keys()))
     else:
-        st.info("Topical Mode: We will scan papers for your selected topic's keywords and extract only matching questions.")
-    topic_dict = SUBJECT_TOPICS.get(SUBJECT_MAPPING[subject_name], {})
-    if topic_dict:
-        selected_topic = st.selectbox("Select Topic", list(topic_dict.keys()))
-    else:
-        selected_topic = st.text_input("Topic Keywords (comma-separated, e.g., Stoichiometry, Acid, Velocity)", value="").strip()
+        keyword = st.text_input("Topic Keywords (comma-separated, e.g., Stoichiometry, Acid, Velocity)", value="").strip()
 
 with st.form("paper_form"):
-    # Row 1: Student Name
-    student_name = st.text_input("Student Name (for Cover Page)", value=user_config.get("default_name", ""))
+    # Row 1: Student Name + Years Selection on one perfectly aligned 50/50 axis
+    name_col, years_col = st.columns(2)
+    with name_col:
+        student_name = st.text_input("Student Name (for Cover Page)", value=user_config.get("default_name", ""))
+    with years_col:
+        current_year = 2024
+        years = st.slider("Years Selection", min_value=2015, max_value=current_year, value=(2020, 2023))
 
     st.subheader("Variants & Series")
 
+    # Row 2: Exam Series + Variants side-by-side (crisp horizontal pill rows)
+    series_options = {"m": "Feb/March (m)", "s": "May/June (s)", "w": "Oct/Nov (w)"}
+    series_col, variant_col = st.columns(2)
+    with series_col:
+        selected_series = st.multiselect(
+            "Exam Series",
+            options=list(series_options.keys()),
+            format_func=lambda x: series_options[x],
+            default=user_config.get("default_series", ["s", "w"])
+        )
+    with variant_col:
+        selected_variants = st.multiselect(
+            "Variants (For May/June & Oct/Nov)",
+            options=[1, 2, 3],
+            default=user_config.get("default_variants", [1, 2, 3])
+        )
+
     st.info("Note: For Feb/March (m) series, standard variant inputs are ignored and only variant 2 is downloaded as per Cambridge rules.")
-    
-    metadata_file = st.file_uploader("Upload Metadata File (YAML)", type=["yaml", "yml"], help="Optional: Upload a papers_metadata.yaml file to define question boundaries and topics. If provided, the tool will use these boundaries and topics instead of auto-detecting them.")
-    metadata = load_metadata() if metadata_file is None else yaml.safe_load(metadata_file) or {}
-    metadata_source = metadata_file.name if metadata_file else "default"
 
     btn_text = "Generate Topical Booklet" if is_topical else "Generate and Download Booklet"
     submit_button = st.form_submit_button(btn_text)
@@ -1478,18 +1177,9 @@ with st.form("paper_form"):
 if submit_button:
     if not selected_series:
         st.error("Please select at least one exam series.")
+    elif is_topical and SUBJECT_MAPPING[subject_name] != "0606" and not keyword:
+        st.error("Please enter a keyword for Topical Mode.")
     else:
-        if is_topical:
-            has_metadata_topics = any(
-                get_paper_metadata(metadata, SUBJECT_MAPPING[subject_name], year, series, f"{paper_component}{var}").get(q, {}).get("topic")
-                for year in range(years[0], years[1] + 1)
-                for series in selected_series
-                for var in ([2] if series == "m" else selected_variants)
-                for q in range(1, 30)
-            )
-            if not selected_topic and not has_metadata_topics:
-                st.error("Please select a topic for Topical Mode or upload a metadata file with topics.")
-                st.stop()
         subject_code = SUBJECT_MAPPING[subject_name]
         
         # Calculate expected number of papers to fetch for progress bar
@@ -1536,7 +1226,7 @@ if submit_button:
                 
                 # 1. Generate Cover Page
                 mode_str = "Topical" if is_topical else "Full Booklet"
-                cover_keyword = selected_topic
+                cover_keyword = selected_math_topic if subject_code == "0606" else keyword
                 cover_pdf = generate_cover_page(student_name, subject_name, years, paper_component, selected_series, mode_str, cover_keyword)
                 merger.append(cover_pdf)
                 
@@ -1545,44 +1235,45 @@ if submit_button:
                 
                 import copy
                 
-                if metadata and is_topical:
-                    status_text.text(f"Processing with metadata ({metadata_source})...")
-                
                 # Collect pages for topical or full booklet mode using stateful parsing
                 for pdf_bytes, year, series, comp_var in downloaded_pdfs:
                     reader = PdfReader(io.BytesIO(pdf_bytes))
-                    paper_meta = get_paper_metadata(metadata, subject_code, year, series, comp_var)
-                    questions = parse_question_boundaries(reader, subject_code, comp_var, paper_meta)
+                    questions = parse_question_boundaries(reader, subject_code, comp_var)
                     
                     year_short = str(year)[-2:]
                     matched_q_nums = []
                     
                     if is_topical:
-                        paper_has_meta_topics = paper_meta and any(q.get("topic") for q in paper_meta.values())
-                        if paper_has_meta_topics and selected_topic:
-                            # Match by the selected topic: scan the metadata for
-                            # that topic and crop each matching question by its
-                            # start_y / end_y coordinates.
-                            for q_num, data in questions.items():
-                                meta = paper_meta.get(q_num, {})
-                                topic = meta.get("topic", "")
-                                if topic_matches(topic, selected_topic):
-                                    matched_q_nums.append((q_num, topic))
-                        elif selected_topic:
-                            # Fallback (no metadata topics for this paper): scan
-                            # the paper text using the selected topic's keywords.
-                            topic_dict = SUBJECT_TOPICS.get(subject_code, {})
-                            if isinstance(selected_topic, str) and selected_topic in topic_dict:
-                                keywords = topic_dict[selected_topic]
-                            else:
-                                keywords = [selected_topic]
-                            pats = keyword_patterns(keywords)
+                        if subject_code == "0606":
+                            patterns = MATH_0606_TOPICS[selected_math_topic]
                             for q_num, data in questions.items():
                                 text_content = data["text"]
+                                text_lower = text_content.lower()
+                                
+                                match_found = False
                                 matched_pat = ""
-                                for pat in pats:
-                                    if re.search(pat, text_content, re.IGNORECASE):
-                                        matched_pat = pat
+                                for pat in patterns:
+                                    if pat == r'\b[A-Z]{2}\b':
+                                        if re.search(pat, text_content) and any(word in text_lower for word in ["vector", "magnitude", "velocity", "collinear", "position"]):
+                                            match_found = True
+                                            matched_pat = "Vector context pattern"
+                                            break
+                                    else:
+                                        if re.search(pat, text_content, re.IGNORECASE):
+                                            match_found = True
+                                            matched_pat = pat
+                                            break
+                                            
+                                if match_found:
+                                    matched_q_nums.append((q_num, matched_pat))
+                        else:
+                            keywords_list = [kw.strip().lower() for kw in keyword.split(',') if kw.strip()]
+                            for q_num, data in questions.items():
+                                text_lower = data["text"].lower()
+                                matched_pat = ""
+                                for kw in keywords_list:
+                                    if re.search(rf"\b{re.escape(kw)}\b", text_lower):
+                                        matched_pat = kw
                                         break
                                 if matched_pat:
                                     matched_q_nums.append((q_num, matched_pat))
@@ -1607,7 +1298,7 @@ if submit_button:
                             compiled_question_ids.add(question_id)
                             
                             data = questions[q_num]
-                            diagnostic_info = f"[DIAGNOSTIC LOG] — Question {q_num} | Matched Topic: {selected_topic} | Core Trigger: '{matched_pat}' | Source Page(s): {data['start_page']}-{data['end_page']}"
+                            diagnostic_info = f"[DIAGNOSTIC LOG] — Question {q_num} | Matched Topic: {selected_math_topic if subject_code == '0606' else keyword} | Core Trigger: '{matched_pat}' | Source Page(s): {data['start_page']}-{data['end_page']}"
                             
                             for p_num in range(data["start_page"], data["end_page"] + 1):
                                 orig_page = fresh_reader.pages[p_num]
@@ -1718,15 +1409,14 @@ if submit_button:
                 output_pdf.seek(0)
                 
                 if not is_topical or successful_topical_papers:
-                    meta_note = f" using metadata from {metadata_source}" if metadata and is_topical else ""
-                    status_text.success(f"Successfully compiled papers{meta_note}!")
+                    status_text.success(f"Successfully compiled papers!")
                     if failed_downloads:
                         with st.expander("Failed to download (Files might not exist)"):
                             for f in failed_downloads:
                                 st.write(f)
                     
                     # Download Button
-                    file_suffix = f"{selected_topic}_Topic_Bank" if is_topical else "Booklet"
+                    file_suffix = f"{keyword}_Topic_Bank" if is_topical else "Booklet"
                     st.download_button(
                         label="⬇️ Download Booklet",
                         data=output_pdf,
@@ -1746,3 +1436,164 @@ with dev_col1:
     diagnostic_mode = st.toggle("Diagnostic Mode", value=False, key="diagnostic_mode")
 with dev_col2:
     render_boundary_lines = st.toggle("Boundary Lines", value=False, key="render_boundary_lines")
+
+# ---- Metadata Generation Section (at the very bottom) ----
+st.markdown("<hr style='margin-top:3rem; margin-bottom:1.25rem;'>", unsafe_allow_html=True)
+st.markdown("###### Generate Metadata for Selected Papers")
+st.caption("Select subjects, papers, and generate a JSON metadata file containing the y-coordinate of the cut line for each question.")
+
+with st.form("metadata_form"):
+    # Multi-select for subjects
+    subject_names = list(SUBJECT_MAPPING.keys())
+    selected_subjects = st.multiselect(
+        "Subjects",
+        options=subject_names,
+        default=subject_names[:],  # default all
+        key="metadata_subjects"
+    )
+    
+    # Component multi-select
+    selected_components = st.multiselect(
+        "Paper Components",
+        options=[1, 2, 3, 4, 5, 6],
+        default=[2],  # default to Paper 2
+        key="metadata_components"
+    )
+    
+    # Series multi-select
+    series_options = {"m": "Feb/March (m)", "s": "May/June (s)", "w": "Oct/Nov (w)"}
+    selected_series = st.multiselect(
+        "Exam Series",
+        options=list(series_options.keys()),
+        format_func=lambda x: series_options[x],
+        default=["s", "w"],  # default May/June and Oct/Nov
+        key="metadata_series"
+    )
+    
+    # Year range slider
+    current_year = 2024
+    selected_years = st.slider(
+        "Years Selection",
+        min_value=2015,
+        max_value=current_year,
+        value=(2020, 2023),
+        key="metadata_years"
+    )
+    
+    # Variant multi-select
+    selected_variants = st.multiselect(
+        "Variants (For May/June & Oct/Nov)",
+        options=[1, 2, 3],
+        default=[1, 2, 3],
+        key="metadata_variants"
+    )
+    
+    # Note about Feb/March
+    st.info("Note: For Feb/March (m) series, standard variant inputs are ignored and only variant 2 is used as per Cambridge rules.")
+    
+    # Submit button
+    submit_metadata = st.form_submit_button("Generate Metadata JSON")
+
+# Process when form submitted
+if submit_metadata:
+    if not selected_subjects:
+        st.error("Please select at least one subject.")
+    elif not selected_components:
+        st.error("Please select at least one paper component.")
+    elif not selected_series:
+        st.error("Please select at least one exam series.")
+    else:
+        # Progress bar
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Build list of papers to process
+        papers_to_process = []  # each entry: (subject_name, subject_code, year, series, component, variant)
+        total_papers = 0
+        for subject_name in selected_subjects:
+            subject_code = SUBJECT_MAPPING[subject_name]
+            for year in range(selected_years[0], selected_years[1] + 1):
+                for series in selected_series:
+                    if series == "m":
+                        variant_list = [2]  # force variant 2 for Feb/March
+                    else:
+                        variant_list = selected_variants
+                    for component in selected_components:
+                        for variant in variant_list:
+                            comp_var = f"{component}{variant}"
+                            papers_to_process.append((subject_name, subject_code, year, series, component, variant, comp_var))
+        total_papers = len(papers_to_process)
+        
+        if total_papers == 0:
+            st.warning("No papers match your selection.")
+        else:
+            status_text.text(f"Processing {total_papers} papers...")
+            metadata_list = []
+            
+            for i, (subject_name, subject_code, year, series, component, variant, comp_var) in enumerate(papers_to_process):
+                # Update progress
+                progress = (i + 1) / total_papers
+                progress_bar.progress(progress)
+                status_text.text(f"Processing {subject_name} {series}{str(year)[-2:]}_qp_{comp_var} ({i+1}/{total_papers})")
+                
+                # Fetch paper
+                pdf_bytes = fetch_paper(subject_code, year, series, comp_var)  # fetch_paper expects component_variant string like "12"
+                if pdf_bytes is None:
+                    status_text.warning(f"Failed to download {subject_name} {series}{str(year)[-2:]}_qp_{comp_var}. Skipping.")
+                    continue
+                
+                # Parse PDF to get question boundaries
+                try:
+                    pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
+                    questions = parse_question_boundaries(pdf_reader, subject_code, comp_var)
+                except Exception as e:
+                    status_text.warning(f"Error parsing {subject_name} {series}{str(year)[-2:]}_qp_{comp_var}: {e}. Skipping.")
+                    continue
+                
+                if not questions:
+                    status_text.warning(f"No questions found in {subject_name} {series}{str(year)[-2:]}_qp_{comp_var}. Skipping.")
+                    continue
+                
+                # Build questions list with cut_y (end_y)
+                questions_list = []
+                for q_num, q_data in sorted(questions.items()):
+                    # end_y is the bottom boundary of the question (could be None)
+                    cut_y = q_data.get("end_y")
+                    questions_list.append({
+                        "question_number": q_num,
+                        "cut_y": cut_y  # None if extends to page bottom
+                    })
+                
+                # Paper ID
+                year_short = str(year)[-2:]
+                paper_id = f"{subject_code}_{series}{year_short}_qp_{comp_var}"
+                
+                metadata_list.append({
+                    "paper_id": paper_id,
+                    "subject": subject_name,
+                    "year": year,
+                    "series": series,
+                    "component": component,
+                    "variant": variant,
+                    "questions": questions_list
+                })
+            
+            # Clear progress
+            progress_bar.empty()
+            status_text.empty()
+            
+            if metadata_list:
+                # Generate JSON
+                import json
+                metadata_json = json.dumps({"papers": metadata_list}, indent=2)
+                
+                # Provide download button
+                st.download_button(
+                    label="⬇️ Download Metadata JSON",
+                    data=metadata_json,
+                    file_name="paper_metadata.json",
+                    mime="application/json"
+                )
+                st.success(f"Generated metadata for {len(metadata_list)} papers.")
+            else:
+                st.warning("No metadata generated (no papers processed successfully).")
