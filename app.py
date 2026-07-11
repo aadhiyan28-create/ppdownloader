@@ -5,10 +5,12 @@ import time
 import re
 import json
 import os
+import yaml
 from pypdf import PdfWriter, PdfReader
 from pypdf.generic import RectangleObject
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
+from metadata import load_metadata, get_paper_metadata, get_available_metadata_subjects, get_metadata_years
 
 # --- CONFIGURATION ---
 CONFIG_FILE = "user_config.json"
@@ -311,8 +313,12 @@ def get_leftmost_candidates(page, page_num):
                 })
     return candidates
 
-def parse_question_boundaries(reader, subject_code=None, comp_var=None):
-    """Parses PDF pages to find structural question boundaries."""
+def parse_question_boundaries(reader, subject_code=None, comp_var=None, paper_metadata=None):
+    """Parses PDF pages to find structural question boundaries.
+    
+    If paper_metadata is provided, it is used as the source of truth for
+    question boundaries. Missing page information is resolved from the PDF.
+    """
     questions = {}
     
     # Build set of skippable formula pages
@@ -320,8 +326,84 @@ def parse_question_boundaries(reader, subject_code=None, comp_var=None):
     for page_num in range(len(reader.pages)):
         if _is_formula_page(reader, page_num, subject_code, comp_var):
             skip_pages.add(page_num)
+    
+    is_mcq = _is_mcq_paper(subject_code, comp_var)
+    
+    # ── METADATA BRANCH ────────────────────────────────────────────────────────
+    if paper_metadata:
+        # Try to resolve missing page info from PDF
+        all_candidates = []
+        for page_num in range(1, len(reader.pages)):
+            if page_num in skip_pages:
+                continue
+            all_candidates.extend(get_leftmost_candidates(reader.pages[page_num], page_num))
+        
+        # Build page->y mapping for questions with start_y but no start_page
+        y_to_page = {}
+        for c in all_candidates:
+            y_to_page[c["y"]] = c["page"]
+        
+        for q_num, meta in paper_metadata.items():
+            start_page = meta.get("start_page")
+            end_page = meta.get("end_page")
+            start_y = meta.get("start_y")
+            end_y = meta.get("end_y")
             
-    # Pass 1: Extract all leftmost candidates
+            if start_page is None and start_y is not None:
+                start_page = y_to_page.get(start_y)
+                if start_page is None:
+                    for c in all_candidates:
+                        if abs(c["y"] - start_y) < 5:
+                            start_page = c["page"]
+                            break
+            
+            if start_page is None:
+                continue
+            
+            if end_page is None:
+                end_page = len(reader.pages) - 1
+                while end_page in skip_pages and end_page > start_page:
+                    end_page -= 1
+            
+            questions[int(q_num)] = {
+                "start_page": start_page,
+                "start_y": start_y,
+                "end_page": end_page,
+                "end_y": end_y,
+                "text": ""
+            }
+        
+        if questions:
+            nums = sorted(questions.keys())
+            for idx, num in enumerate(nums):
+                data = questions[num]
+                if idx < len(nums) - 1:
+                    next_num = nums[idx + 1]
+                    next_data = questions[next_num]
+                    next_page = next_data["start_page"]
+                    if next_page == data["start_page"] and next_data.get("start_y") is not None:
+                        data["end_page"] = next_page
+                        data["end_y"] = next_data["start_y"]
+                    elif next_page > data["start_page"]:
+                        end_p = next_page - 1
+                        while end_p in skip_pages and end_p > data["start_page"]:
+                            end_p -= 1
+                        data["end_page"] = end_p
+                        data["end_y"] = None
+            
+            for q_num, data in questions.items():
+                combined_text = ""
+                for p in range(data["start_page"], data["end_page"] + 1):
+                    if p in skip_pages:
+                        continue
+                    page_text = reader.pages[p].extract_text()
+                    if page_text:
+                        combined_text += page_text + "\n"
+                data["text"] = combined_text
+            
+            return questions
+    
+    # ── AUTOMATIC PARSING (fallback when no metadata) ─────────────────────────
     all_candidates = []
     for page_num in range(1, len(reader.pages)):
         if page_num in skip_pages:
@@ -1134,7 +1216,17 @@ is_topical = (app_mode == "Topical Question Bank Mode")
 selected_math_topic = ""
 keyword = ""
 if is_topical:
-    st.info("Topical Mode: We will scan papers for your keywords and extract only matching questions.")
+    has_meta_topics = any(
+        get_paper_metadata(metadata, SUBJECT_MAPPING[subject_name], y, s, f"{paper_component}{v}").get(q, {}).get("topic")
+        for y in range(years[0], years[1] + 1)
+        for s in selected_series
+        for v in ([2] if s == "m" else selected_variants)
+        for q in range(1, 30)
+    )
+    if has_meta_topics:
+        st.info("Topical Mode: Using metadata topics to match questions. Auto-detection is disabled.")
+    else:
+        st.info("Topical Mode: We will scan papers for your keywords and extract only matching questions.")
     if SUBJECT_MAPPING[subject_name] == "0606":
         selected_math_topic = st.selectbox("Select Additional Mathematics Topic", list(MATH_0606_TOPICS.keys()))
     else:
@@ -1169,6 +1261,10 @@ with st.form("paper_form"):
         )
 
     st.info("Note: For Feb/March (m) series, standard variant inputs are ignored and only variant 2 is downloaded as per Cambridge rules.")
+    
+    metadata_file = st.file_uploader("Upload Metadata File (YAML)", type=["yaml", "yml"], help="Optional: Upload a papers_metadata.yaml file to define question boundaries and topics. If provided, the tool will use these boundaries and topics instead of auto-detecting them.")
+    metadata = load_metadata() if metadata_file is None else yaml.safe_load(metadata_file) or {}
+    metadata_source = metadata_file.name if metadata_file else "default"
 
     btn_text = "Generate Topical Booklet" if is_topical else "Generate and Download Booklet"
     submit_button = st.form_submit_button(btn_text)
@@ -1177,8 +1273,16 @@ with st.form("paper_form"):
 if submit_button:
     if not selected_series:
         st.error("Please select at least one exam series.")
-    elif is_topical and SUBJECT_MAPPING[subject_name] != "0606" and not keyword:
-        st.error("Please enter a keyword for Topical Mode.")
+    elif is_topical and SUBJECT_MAPPING[subject_name] != "0606":
+        has_metadata_topics = any(
+            get_paper_metadata(metadata, SUBJECT_MAPPING[subject_name], year, series, f"{paper_component}{var}").get(q, {}).get("topic")
+            for year in range(years[0], years[1] + 1)
+            for series in selected_series
+            for var in ([2] if series == "m" else selected_variants)
+            for q in range(1, 30)
+        )
+        if not keyword and not has_metadata_topics:
+            st.error("Please enter a keyword for Topical Mode or upload a metadata file with topics.")
     else:
         subject_code = SUBJECT_MAPPING[subject_name]
         
@@ -1235,16 +1339,27 @@ if submit_button:
                 
                 import copy
                 
+                if metadata and is_topical:
+                    status_text.text(f"Processing with metadata ({metadata_source})...")
+                
                 # Collect pages for topical or full booklet mode using stateful parsing
                 for pdf_bytes, year, series, comp_var in downloaded_pdfs:
                     reader = PdfReader(io.BytesIO(pdf_bytes))
-                    questions = parse_question_boundaries(reader, subject_code, comp_var)
+                    paper_meta = get_paper_metadata(metadata, subject_code, year, series, comp_var)
+                    questions = parse_question_boundaries(reader, subject_code, comp_var, paper_meta)
                     
                     year_short = str(year)[-2:]
                     matched_q_nums = []
                     
                     if is_topical:
-                        if subject_code == "0606":
+                        # If metadata provides topics, match by metadata topic instead of auto-detection
+                        if paper_meta and any(q.get("topic") for q in paper_meta.values()):
+                            for q_num, data in questions.items():
+                                meta = paper_meta.get(q_num, {})
+                                topic = meta.get("topic", "")
+                                if topic:
+                                    matched_q_nums.append((q_num, topic))
+                        elif subject_code == "0606":
                             patterns = MATH_0606_TOPICS[selected_math_topic]
                             for q_num, data in questions.items():
                                 text_content = data["text"]
@@ -1263,7 +1378,7 @@ if submit_button:
                                             match_found = True
                                             matched_pat = pat
                                             break
-                                            
+                                    
                                 if match_found:
                                     matched_q_nums.append((q_num, matched_pat))
                         else:
@@ -1409,7 +1524,8 @@ if submit_button:
                 output_pdf.seek(0)
                 
                 if not is_topical or successful_topical_papers:
-                    status_text.success(f"Successfully compiled papers!")
+                    meta_note = f" using metadata from {metadata_source}" if metadata and is_topical else ""
+                    status_text.success(f"Successfully compiled papers{meta_note}!")
                     if failed_downloads:
                         with st.expander("Failed to download (Files might not exist)"):
                             for f in failed_downloads:

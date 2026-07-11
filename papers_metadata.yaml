@@ -1,0 +1,16 @@
+"0625_s21_qp_42":
+  questions:
+    - q: 1
+      start_y: 453.3
+      end_y: 7.0
+      topic: Momentum and Impulse
+    - q: 2
+      start_y: 237.3
+      end_y: 18.0
+      topic: Electricity and Circuits
+
+# Alternative line-based format (also supported):
+# "0625_s21_qp_41":
+#   lines:
+#     - Q1-y453.3-7. Momentum and Impulse
+#     - Q2-y237.3-18. Electricity and Circuits
